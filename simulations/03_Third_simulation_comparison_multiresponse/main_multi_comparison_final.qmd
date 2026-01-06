@@ -1,0 +1,299 @@
+---
+title: "Final Comparison: Multi-Response Linear Regression"
+subtitle: "Method performance in the automatically discovered optimal scenario"
+format: html
+editor: visual
+---
+
+## 1. Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+# Core libraries
+library(glmnet)
+library(dplyr)
+library(ggplot2)
+library(foreach)
+library(doParallel)
+library(progressr)
+library(lhs) # For LHS data generation
+
+# Load all our custom functions
+source("../../R/data_generator.R")
+source("../../R/solvers.R")
+
+# --- LHS Generators (defined here for portability) ---
+generate_X_t_LHS <- function(n, p, df_X, scale_X = 1, ...) {
+  hypercube <- randomLHS(n, p)
+  X_raw <- qt(hypercube, df = df_X)
+  return(X_raw * scale_X)
+}
+
+generate_E_t_LHS <- function(n, m, df_E, scale_E = 1, ...) {
+  hypercube <- randomLHS(n, m)
+  E_raw <- qt(hypercube, df = df_E)
+  return(E_raw * scale_E)
+}
+```
+
+## 2. Final Simulation Parameters
+
+Parameters are based on the results from the scenario discovery phase.
+
+```{r final-params}
+# --- Best Battlefield Data Generation Parameters ---
+BEST_SCALE_X <- 1.0
+BEST_DF_X <- 3.5
+DF_E <- 1.5
+
+# --- Fixed Model Parameters ---
+P <- 200
+M <- 4
+S_STAR <- 2
+
+# Define the fixed, integer-valued true Theta_star
+THETA_STAR <- matrix(0, nrow = P, ncol = M)
+THETA_STAR[1:S_STAR, ] <- matrix(c(5, 4, 5, 5, 6, 4, 4, 5), nrow = S_STAR, byrow = TRUE)
+
+# --- Final Simulation Grid ---
+N_SEQUENCE_FINAL <- seq(200, 1400, by = 300)
+METHODS <- c("RIGHT", "IHT", "Shrinkage", "Adaptive Huber", "Lasso")
+N_REPS_FINAL <- 300 # A reasonable number for a local final run
+
+param_grid_final <- expand.grid(
+  n = N_SEQUENCE_FINAL,
+  method = METHODS,
+  rep_id = 1:N_REPS_FINAL
+)
+```
+
+## 3. Main Simulation Loop (Parallel)
+
+This is the main execution block, implementing the fair comparison framework.
+
+```{r main-loop-final, cache=TRUE}
+# --- Setup Parallel Backend ---
+num_cores <- max(1, detectCores() - 1)
+registerDoParallel(cores = num_cores)
+cat(sprintf("Running final simulation on %d cores.\n", num_cores))
+
+# --- Run the loop with a progress bar ---
+execution_time <- system.time({
+  with_progress({
+    p_bar <- progressor(steps = nrow(param_grid_final))
+    
+    results_list <- foreach(
+      i = 1:nrow(param_grid_final),
+      .combine = 'rbind',
+      .packages = c("dplyr", "glmnet", "lhs")
+    ) %dopar% {
+      
+      p_bar()
+      
+      # --- Setup for each task ---
+      source("../../R/data_generator.R")
+      source("../../R/solvers.R")
+      # Make LHS generators available to workers
+      generate_X_t_LHS <- function(n, p, df_X, scale_X = 1, ...) {
+        hypercube <- lhs::randomLHS(n, p)
+        X_raw <- qt(hypercube, df = df_X)
+        return(X_raw * scale_X)
+      }
+      generate_E_t_LHS <- function(n, m, df_E, scale_E = 1, ...) {
+        hypercube <- lhs::randomLHS(n, m)
+        E_raw <- qt(hypercube, df = df_E)
+        return(E_raw * scale_E)
+      }
+      
+      params <- param_grid_final[i, ]
+      n <- params$n
+      method <- as.character(params$method)
+      rep_id <- params$rep_id
+      
+      set.seed(i)
+      
+      # Generate full dataset using the BEST SCENARIO and LHS
+      sim_data <- generate_multi_response_data(
+        n = n, p = P, m = M, Theta_star = THETA_STAR,
+        generator_X = generate_X_t_LHS,
+        generator_E = generate_E_t_LHS,
+        df_X = BEST_DF_X, scale_X = BEST_SCALE_X,
+        df_E = DF_E
+      )
+      X_full <- sim_data$X
+      Y_full <- sim_data$Y
+      
+      # --- UNIFIED 80/20 Split for ALL tuning procedures ---
+      train_size <- floor(0.8 * n)
+      train_idx <- sample(1:n, size = train_size)
+      X_train <- X_full[train_idx, ]; Y_train <- Y_full[train_idx, , drop = FALSE]
+      X_val <- X_full[-train_idx, ]; Y_val <- Y_full[-train_idx, , drop = FALSE]
+      
+      # --- Run Solver based on Method ---
+      Theta_hat <- switch(
+        method,
+        "RIGHT" = {
+          s <- 2 * S_STAR; eta <- 0.01; T_max <- 400; c_K <- 1.0
+          K <- max(1, round(c_K * (M + log(P) + log(log(n) / (M + log(P))))))
+          solver_right(X_full, Y_full, s, eta, T_max, K, grad_func_samplewise = grad_multi_response_samplewise)
+        },
+        "IHT" = {
+          s <- 2 * S_STAR; eta <- 0.001; T_max <- 600
+          solver_iht(X_full, Y_full, s, eta, T_max, grad_func = grad_multi_response)
+        },
+        "Lasso" = {
+          cv_fit <- cv.glmnet(X_train, Y_train, family = "mgaussian", standardize = FALSE, intercept = FALSE)
+          lambda_best <- cv_fit$lambda.min
+          final_fit <- glmnet(X_full, Y_full, family = "mgaussian", lambda = lambda_best, standardize = FALSE, intercept = FALSE)
+          coef_list <- coef(final_fit, s = lambda_best)
+          do.call(cbind, lapply(coef_list, function(m) as.vector(m)[-1]))
+        },
+        "Shrinkage" = {
+          tau_x_fixed <- quantile(abs(X_train), 0.95)
+          tau_y_fixed <- quantile(abs(Y_train), 0.95)
+          X_train_shrunk <- truncate_operator(X_train, tau_x_fixed)
+          Y_train_shrunk <- truncate_operator(Y_train, tau_y_fixed)
+          cv_fit <- cv.glmnet(X_train_shrunk, Y_train_shrunk, family = "mgaussian", standardize = FALSE, intercept = FALSE)
+          lambda_best <- cv_fit$lambda.min
+          solver_shrinkage_method_multi(X_full, Y_full, tau_x_fixed, tau_y_fixed, lambda_best)
+        },
+        "Adaptive Huber" = {
+          cv_lasso_init <- cv.glmnet(X_train, Y_train, family = "mgaussian", standardize = FALSE, intercept = FALSE)
+          coef_list_init <- coef(cv_lasso_init, s = "lambda.min")
+          Theta_init_lasso <- do.call(cbind, lapply(coef_list_init, function(m) as.vector(m)[-1]))
+          residuals_init <- Y_train - X_train %*% Theta_init_lasso
+          tau_fixed <- quantile(abs(residuals_init), 0.95)
+          
+          lambda_grid <- 10^seq(-2, 1, length.out = 10)
+          best_mse <- Inf
+          lambda_best <- NA
+          for (lambda_val in lambda_grid) {
+            Theta_tuned <- solver_huber_group_lasso(X_train, Y_train, lambda_val, tau_fixed, T_max = 250)
+            Y_pred_val <- X_val %*% Theta_tuned
+            mse_val <- mean((Y_val - Y_pred_val)^2)
+            if (is.finite(mse_val) && mse_val < best_mse) {
+              best_mse <- mse_val
+              lambda_best <- lambda_val
+            }
+          }
+          if(is.na(lambda_best)) { return(data.frame(n=n, method=method, rep_id=rep_id, l2_error=NA)) }
+          solver_huber_group_lasso(X_full, Y_full, lambda_best, tau_fixed, T_max = 500)
+        }
+      )
+      
+      # --- Calculate and return results ---
+      l2_error <- if(any(is.na(Theta_hat))) NA else sqrt(sum((Theta_hat - THETA_STAR)^2))
+      data.frame(n = n, method = method, rep_id = rep_id, l2_error = l2_error)
+    }
+  })
+})
+
+# --- Stop the parallel cluster ---
+stopImplicitCluster()
+#cat("重复次数", N_REPS_FINAL, " 花费时间")
+#print(execution_time)
+```
+
+## 4. Analysis and Visualization
+
+```{r analysis-final}
+local_results_df <- results_list
+#saveRDS(local_results_df, "../../results/03_Third_simulation_comparison_multiresponse/raw_results_multi_comparison.rds")
+
+summary_local <- local_results_df %>%
+  group_by(n, method) %>%
+  summarise(mean_l2_error = mean(l2_error, na.rm = TRUE), .groups = 'drop')
+
+#print(summary_local)
+ saveRDS(summary_local, "../../results/03_Third_simulation_comparison_multiresponse/final_results_multi_comparison.rds")
+
+summary_local <- summary_local %>%
+  filter(is.finite(mean_l2_error) & mean_l2_error > 0) %>%
+  mutate(log_n = log(n), log_error = log(mean_l2_error))
+
+summary_local$method <- factor(summary_local$method, 
+                               levels = c("RIGHT", "Adaptive Huber", "Shrinkage", "Lasso", "IHT"))
+
+multi_comparison_final <- ggplot(summary_local, aes(x = log_n, y = log_error, color = method, group = method, shape = method)) +
+  geom_line(linewidth = 1.2, alpha = 0.8) +
+  geom_point(size = 2) +
+  labs(
+   # title = "Final Comparison: Multi-Response Regression",
+    #subtitle = "Log Mean L2 Error vs. Log Sample Size under Heavy-Tailed Conditions",
+    x = "Log(Sample Size, n)",
+    y = "Log(Mean L2 Error)"
+  ) +
+  theme_minimal(base_size = 14) + 
+  theme(axis.text = element_text(size = 16, color = "black"),
+         legend.title = element_text(size = 16), 
+    legend.text = element_text(size = 14)   )+
+  scale_color_viridis_d(name = "Method") +
+  scale_shape_manual(
+    name = "Method",
+    values = c("RIGHT" = 16, "Adaptive Huber" = 17, "Shrinkage" = 15, "Lasso" = 18, "IHT" = 4)
+  )
+
+print(multi_comparison_final)
+#ggsave("final_comparison_multi_model.png", multi_comparison_final, height = 4, width = 10, dpi = 300)
+```
+
+Change the colors
+
+```{r}
+library(ggplot2)
+selected_palette <- c(
+  "RIGHT"          = "#332288", # Indigo
+  "Adaptive Huber" = "#3B82A1",  # Cyan
+  "Shrinkage"      = "#44AA99", # Teal
+  "Lasso"          = "#CAB54B" ,# Sand
+  "IHT"            = "#CC6677"  # Rose
+)
+
+
+summary_local$method <- factor(summary_local$method, 
+                               levels = c("RIGHT", "Adaptive Huber", "Shrinkage", "Lasso", "IHT"))
+
+
+
+multi_comparison_final <- ggplot(
+  summary_local, 
+  aes(x = log_n, y = log_error, color = method, group = method, shape = method)
+) +
+ 
+  geom_line(linewidth = 1.0) +
+  geom_point(size = 2.9) +
+  
+  labs(
+    x = "Log(Sample Size, n)",
+    y = "Log(Mean L2 Error)"
+  ) +
+  
+ 
+  scale_color_manual(
+    name = "Method",
+    values = selected_palette,
+    drop = FALSE 
+  ) +
+  
+  
+  scale_shape_manual(
+    name = "Method",
+    values = c("RIGHT" = 16, "Adaptive Huber" = 17, "Shrinkage" = 15, "Lasso" = 12, "IHT" = 4),
+    drop = FALSE
+  ) +
+
+  
+  theme_bw(base_size = 16) + 
+  theme(
+    axis.title = element_text(size = 18),
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 14),
+    panel.grid.minor = element_blank(), 
+    strip.background = element_rect(fill = "gray90", color = "black"),
+    strip.text = element_text(size = 14, face = "bold")
+  )
+
+
+print(multi_comparison_final)
+#ggsave("../../results/03_Third_simulation_comparison_multiresponse/final_comparison_multi_model.png", multi_comparison_final, height = 4, width = 10, dpi = 300)
+#ggsave("../../results/03_Third_simulation_comparison_multiresponse/final_comparison_multi_model.pdf", multi_comparison_final, height = 4, width = 10, dpi = 300)
+```

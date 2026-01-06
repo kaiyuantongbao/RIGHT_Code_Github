@@ -1,0 +1,271 @@
+---
+title: "Final Comparison: Logistic Regression"
+subtitle: "Method performance under heavy-tailed features (LHS)"
+format: html
+editor: visual
+---
+
+## 1. Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+# Core libraries
+library(glmnet)
+library(dplyr)
+library(ggplot2)
+library(foreach)
+library(doParallel)
+library(progressr)
+library(lhs) # For Latin Hypercube Sampling
+
+# Load all our custom functions
+source("../../R/data_generator.R")
+source("../../R/solvers.R")
+
+# --- New LHS Generator for t-distributed features ---
+generate_X_t_LHS <- function(n, p, df_X, scale_X = 1, ...) {
+  hypercube <- randomLHS(n, p)
+  X_raw <- qt(hypercube, df = df_X)
+  X_scaled <- X_raw * scale_X
+  return(X_scaled)
+}
+```
+
+## 2. Final Simulation Parameters
+
+```{r}
+# --- Final Data Generation Parameters ---
+BEST_DF_X <- 2.1
+BEST_SCALE_X <- 3
+BEST_THETA_MAGNITUDE <- 1 # Coefficients for logistic are typically smaller
+
+# --- Fixed Model Parameters ---
+P <- 600
+S_STAR <- 5
+THETA_STAR <- rep(0, P)
+# Generate random coefficients around the magnitude
+set.seed(1)
+THETA_STAR[1:S_STAR] <- runif(S_STAR, BEST_THETA_MAGNITUDE - 0.5, BEST_THETA_MAGNITUDE + 0.5)
+
+# --- Final Simulation Grid ---
+N_SEQUENCE_FINAL <- seq(400, 1600, by=300)
+METHODS <- c("RIGHT", "IHT", "Shrinkage", "Lasso")
+#METHODS <- c("RIGHT", "IHT")
+N_REPS_FINAL <- 200 # Adjust as needed for final run
+
+param_grid_final <- expand.grid(
+  n = N_SEQUENCE_FINAL,
+  method = METHODS,
+  rep_id = 1:N_REPS_FINAL
+)
+
+```
+
+## 3. Main Simulation Loop (Parallel)
+
+```{r main-loop-final, cache=TRUE}
+# --- Setup Parallel Backend ---
+num_cores <- max(1, detectCores() - 1)
+registerDoParallel(cores = num_cores)
+cat(sprintf("Running FINAL simulation for Logistic Regression on %d cores.\n", num_cores))
+
+# --- Run the loop with a progress bar ---
+execution_time <- system.time({
+  with_progress({
+    p_bar <- progressor(steps = nrow(param_grid_final))
+    
+    results_list <- foreach(
+      i = 1:nrow(param_grid_final),
+      .combine = 'rbind',
+      .packages = c("dplyr", "glmnet", "lhs")
+    ) %dopar% {
+      
+      p_bar()
+      
+      # --- Setup for each task ---
+      source("../../R/data_generator.R")
+      source("../../R/solvers.R")
+      
+      # Make the LHS generator available to workers
+      generate_X_t_LHS <- function(n, p, df_X, scale_X = 1, ...) {
+        hypercube <- lhs::randomLHS(n, p)
+        X_raw <- stats::qt(hypercube, df = df_X)
+        X_scaled <- X_raw * scale_X
+        return(X_scaled)
+      }
+      
+      params <- param_grid_final[i, ]
+      n <- params$n
+      method <- as.character(params$method)
+      rep_id <- params$rep_id
+      
+      set.seed(i)
+      
+      # Generate LOGISTIC data using LHS for X
+      sim_data <- generate_logistic_data(
+        n = n, p = P, theta_star = THETA_STAR,
+        generator_X = generate_X_t_LHS,
+        df_X = BEST_DF_X,
+        scale_X = BEST_SCALE_X
+      )
+      X_full <- sim_data$X
+      y_full <- sim_data$y
+      
+      # --- UNIFIED 80/20 Split for ALL tuning procedures ---
+      train_size <- floor(0.8 * n)
+      train_idx <- sample(1:n, size = train_size)
+      X_train <- X_full[train_idx, ]; y_train <- y_full[train_idx]
+      X_val <- X_full[-train_idx, ]; y_val <- y_full[-train_idx]
+      
+      # --- Run Solver based on Method ---
+      theta_hat <- switch(
+        method,
+        "RIGHT" = {
+          s <- 10; c_K <- 4; eta <- 0.02; T_max <- 1500
+          K <- max(1, round(c_K * log(P * log(n / log(P)))))
+          solver_right(X_full, y_full, s, eta, T_max, K, grad_func_samplewise = grad_logistic_regression_samplewise)
+        },
+        "IHT" = {
+          s <- 10; eta <- 0.02; T_max <- 1500
+          solver_iht(X_full, y_full, s, eta, T_max, grad_func = grad_logistic_regression)
+        },
+        "Lasso" = {
+          cv_fit <- cv.glmnet(X_train, y_train, family = "binomial", standardize = FALSE, intercept = FALSE)
+          lambda_best <- cv_fit$lambda.min
+          final_fit <- glmnet(X_full, y_full, lambda = lambda_best, family = "binomial", standardize = FALSE, intercept = FALSE)
+          as.vector(final_fit$beta)
+        },
+        "Shrinkage" = {
+          tau_x_fixed <- quantile(abs(X_train), 0.95)
+          X_train_shrunk <- truncate_operator(X_train, tau_x_fixed)
+          
+          cv_fit <- cv.glmnet(X_train_shrunk, y_train, family = "binomial", standardize = FALSE, intercept = FALSE)
+          lambda_best <- cv_fit$lambda.min
+          
+          # Final fit on full data
+          # Pass a large tau_y to ensure no truncation on the 0/1 response
+          solver_shrinkage_method(X_full, y_full, tau_x_fixed, 999, lambda_best, family = "binomial")
+        }
+      )
+      
+      # --- Calculate and return results ---
+      l2_error <- if(any(is.na(theta_hat))) NA else sqrt(sum((theta_hat - THETA_STAR)^2))
+      data.frame(n = n, method = method, rep_id = rep_id, l2_error = l2_error)
+    }
+  })
+})
+
+# --- Stop the parallel cluster ---
+stopImplicitCluster()
+#cat("重复次数", N_REPS_FINAL, " 花费时间")
+#print(execution_time)
+```
+
+## 4. Analysis and Visualization
+
+```{r analysis-final}
+# The result from foreach is already a combined data frame
+local_results_df <- results_list
+saveRDS(results_list,"../../results/04_Fourth_simulation_comparison_logistic_model/raw_results.rds")
+# Aggregate results
+summary_local <- local_results_df %>%
+  group_by(n, method) %>%
+  summarise(mean_l2_error = mean(l2_error, na.rm = TRUE), .groups = 'drop')
+
+print(summary_local)
+
+
+# Plot on log-log scale
+summary_local <- summary_local %>%
+  filter(is.finite(mean_l2_error)) %>%
+  mutate(log_n = log(n), log_error = log(mean_l2_error))
+saveRDS(summary_local,"../../results/04_Fourth_simulation_comparison_logistic_model/final_results.rds")
+
+# Reorder factor levels for a clean legend
+summary_local$method <- factor(summary_local$method, 
+                               levels = c("RIGHT", "Shrinkage", "Lasso", "IHT"))
+
+logistic_comparison_final <- ggplot(summary_local, aes(x = log_n, y = log_error, color = method, group = method, shape = method)) +
+  geom_line(linewidth = 1.2, alpha = 0.8) +
+  geom_point(size = 2) +
+  labs(
+    #title = "Final Comparison: Logistic Regression",
+    #subtitle = "Log Mean L2 Error vs. Log Sample Size under Heavy-Tailed Features",
+    x = "Log(Sample Size, n)",
+    y = "Log(Mean L2 Error)"
+  ) +
+ theme_minimal(base_size = 16) +
+  theme(axis.text = element_text(size = 16, color = "black"),
+         legend.title = element_text(size = 16), 
+    legend.text = element_text(size = 14)   )+
+  scale_color_viridis_d() +
+  scale_shape_manual(
+    name = "method",
+    values = c("RIGHT" = 16,"Shrinkage" = 15, "Lasso" = 18, "IHT" = 4),
+    drop = FALSE # <-- Also here for consistency
+  )
+
+print(logistic_comparison_final)
+#ggsave("final_comparison_logistic_model.pdf", logistic_comparison_final, height = 4, width = 10, dpi = 300)
+#ggsave("final_comparison_logistic_model.png", logistic_comparison_final, height = 4, width = 10, dpi = 300)
+```
+
+```{r}
+#Chnage colors
+library(ggplot2)
+
+selected_palette <- c(
+  "RIGHT"          = "#332288", # Indigo
+  "Adaptive Huber" = "#3B82A1",  # Cyan
+  "Shrinkage"      = "#44AA99", # Teal
+  "Lasso"          = "#CAB54B" ,# Sand
+  "IHT"            = "#CC6677"  # Rose
+)
+# Reorder factor levels for a clean legend 
+summary_local$method <- factor(summary_local$method, 
+                               levels = c("RIGHT", "Shrinkage", "Lasso", "IHT"))
+
+
+
+logistic_comparison_final <- ggplot(
+  summary_local, 
+  aes(x = log_n, y = log_error, color = method, group = method, shape = method)
+) +
+  
+  geom_line(linewidth = 1.0) +
+  geom_point(size = 2.9) +
+  
+  labs(
+    x = "Log(Sample Size, n)",
+    y = "Log(Mean L2 Error)"
+  ) +
+  
+  scale_color_manual(
+    name = "Method", 
+    values = selected_palette,
+    drop = FALSE 
+  ) +
+  
+ 
+  scale_shape_manual(
+    name = "Method", 
+    values = c("RIGHT" = 16, "Shrinkage" = 15, "Lasso" = 12, "IHT" = 4),
+    drop = FALSE
+  ) +
+
+  # --- 调整字体大小和主题 (与前两个图表保持一致) ---
+  theme_bw(base_size = 16) +
+  theme(
+    axis.title = element_text(size = 18),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 14),
+    panel.grid.minor = element_blank(),
+    strip.background = element_rect(fill = "gray90", color = "black"),
+    strip.text = element_text(size = 14, face = "bold")
+  )
+
+
+print(logistic_comparison_final)
+ggsave("../../results/04_Fourth_simulation_comparison_logistic_model/final_comparison_logistic_model.pdf", logistic_comparison_final, height = 4, width = 10, dpi = 300)
+ggsave("../../results/04_Fourth_simulation_comparison_logistic_model/final_comparison_logistic_model.png", logistic_comparison_final, height = 4, width = 10, dpi = 300)
+
+```

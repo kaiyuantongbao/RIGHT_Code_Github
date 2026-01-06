@@ -1,0 +1,267 @@
+---
+title: "Decisive Experiment: Gradient Rate on a Disjoint Support"
+subtitle: "Verifying the minimax rate at a 'harder' point theta_3"
+format: html
+editor: visual
+---
+
+## 1. Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+# Core libraries
+library(dplyr)
+library(ggplot2)
+library(foreach)
+library(doParallel)
+library(progressr)
+library(lhs)
+
+# Load all our custom functions
+source("../../R/data_generator.R")
+source("../../R/solvers.R")
+
+# --- LHS Generators ---
+generate_epsilon_gaussian_LHS <- function(n, sigma2_eps = 1, ...) {
+  hypercube_vec <- randomLHS(n, 1)[, 1]
+  epsilon <- qnorm(hypercube_vec, mean = 0, sd = sqrt(sigma2_eps))
+  return(epsilon)
+}
+generate_X_t_LHS <- function(n, p, df_X, scale_X = 1, ...) {
+  hypercube <- randomLHS(n, p)
+  X_raw <- qt(hypercube, df = df_X)
+  X_scaled <- X_raw * scale_X
+  return(X_scaled)
+}
+```
+
+## 2. Simulation Parameters
+
+```{r params}
+# --- Fixed Model Parameters ---
+P <- 600
+S_STAR <- 5
+THETA_STAR <- rep(0, P)
+THETA_STAR[1:S_STAR] <- c(5, -5, 6, -6, 7)
+scale_X=1.5
+# --- KEY: Define the "hard" evaluation point theta_3 ---
+THETA_3 <- rep(0, P)
+# Disjoint support: indices 6 to 10
+THETA_3[ (S_STAR + 1) : (2 * S_STAR) ] <- c(5, -5, 6, -6, 7)
+
+# --- Best Scenario Parameters (from previous discovery) ---
+BEST_SCALE_X <- 1.0
+BEST_C_K <- 12.0
+
+# --- Simulation Grid ---
+LAMBDAS <- c(0.1,0.2, 0.4, 0.6, 0.8,10,15)
+#LAMBDAS <- c(0.2,5)
+K_SEQUENCE <- c(1, 5, 9, 13, 17)
+N_SEQUENCE <- round(300 * exp(0.2 * K_SEQUENCE))
+N_REPS <- 200
+
+param_grid <- expand.grid(
+  lambda_moment = LAMBDAS,
+  n = N_SEQUENCE,
+  rep_id = 1:N_REPS
+)
+```
+
+## 3. Main Simulation Loop (Parallel)
+
+```{r main-loop, cache=TRUE}
+# --- Setup Parallel Backend ---
+num_cores <- max(1, detectCores() - 1)
+registerDoParallel(cores = num_cores)
+
+with_progress({
+  p_bar <- progressor(steps = nrow(param_grid))
+  
+  results_list <- foreach(
+    i = 1:nrow(param_grid),
+    .combine = 'rbind',
+    .packages = c("dplyr", "lhs")
+  ) %dopar% {
+    
+    p_bar()
+    
+    # --- Setup for each task ---
+    source("../../R/data_generator.R")
+    source("../../R/solvers.R")
+    # Re-define LHS generators
+    generate_epsilon_gaussian_LHS <- function(n, sigma2_eps = 1, ...) {
+  hypercube_vec <- randomLHS(n, 1)[, 1]
+  epsilon <- qnorm(hypercube_vec, mean = 0, sd = sqrt(sigma2_eps))
+  return(epsilon)
+}
+generate_X_t_LHS <- function(n, p, df_X, scale_X = 1, ...) {
+  hypercube <- randomLHS(n, p)
+  X_raw <- qt(hypercube, df = df_X)
+  X_scaled <- X_raw * scale_X
+  return(X_scaled)
+}
+    params <- param_grid[i, ]
+    n <- params$n
+    lambda_moment <- params$lambda_moment
+    
+    set.seed(i)
+    
+    # --- 1. Generate Data ---
+    df_X <- 2 + 2 * lambda_moment
+    sim_data <- generate_linear_data(
+      n = n, p = P, theta_star = THETA_STAR,
+      generator_X = generate_X_t_LHS,
+      generator_epsilon = generate_epsilon_gaussian_LHS,
+      df_X = df_X,
+      scale_X = scale_X
+    )
+    X <- sim_data$X
+    y <- sim_data$y
+    
+    # --- 2. Estimate Gradient at theta = THETA_3 ---
+    K <- max(1, round( 12*log(P * log(n / log(P)))))
+    
+    grad_hat <- robust_grad_MoM(
+      theta = THETA_3, # <-- KEY CHANGE
+      X = X, y = y, K = K, 
+      grad_func_samplewise = grad_linear_regression_samplewise
+    )
+    
+    # --- 3. Calculate True Expected Gradient at theta = THETA_3 ---
+    sigma2_x_scaled <- (scale_X^2) * (df_X / (df_X - 2))
+grad_true <- sigma2_x_scaled * (THETA_3 - THETA_STAR)
+    
+    # --- 4. Calculate L2 Error ---
+    l2_error <- sqrt(sum((grad_hat - grad_true)^2))
+    
+    # Return results
+    data.frame(
+      n = n,
+      lambda_moment = lambda_moment,
+      rep_id = params$rep_id,
+      grad_error = l2_error
+    )
+  }
+})
+
+stopImplicitCluster()
+```
+
+## 4. Analysis and Visualization
+
+```{r analysis}
+# Aggregate results
+summary_results <- results_list %>%
+  group_by(n, lambda_moment) %>%
+  summarise(mean_grad_error = mean(grad_error, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(
+    log_n = log(n),
+    log_error = log(mean_grad_error),
+    lambda_factor = as.factor(paste0("lambda = ", lambda_moment))
+  )
+saveRDS(results_list,"../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_n_vs_lambda_raw_results.rds")
+saveRDS(summary_results,"../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_n_vs_lambda_final_results.rds")
+```
+
+```{r}
+#normalize the line
+# Aggregate results by taking the mean of the gradient error
+# We group by each curve (i.e., by lambda_factor) and subtract the first
+# value of log_error from all other values in that group.
+normalized_summary <- summary_results %>%
+  # Ensure data is sorted by n within each group
+  arrange(lambda_factor, n) %>% 
+  group_by(lambda_factor) %>%
+  mutate(
+    normalized_log_error = log_error - first(log_error)
+  )
+normalized_summary$lambda<-as.numeric(normalized_summary$lambda_moment)-0.01
+normalized_summary$lambda<-as.factor(normalized_summary$lambda)
+# --- Verify the slopes ---
+normalized_summary$lambda<-as.numeric(normalized_summary$lambda_moment)-0.01
+slope_summary <- normalized_summary %>%
+  group_by(lambda) %>%
+  do(model = lm(log_error ~ log_n, data = .)) %>%
+  summarise(
+    lambda = lambda,
+    empirical_slope = coef(model)[2],
+    R_2=summary(model)$r.squared,
+    theoretical_slope = pmax(-lambda / (1 + lambda), -0.5)
+  )
+
+cat("\n--- Comparison of Empirical and Theoretical Slopes ---\n")
+print(slope_summary)
+```
+
+plot lines with different lambda
+
+```{r}
+
+# install.packages("ggplot2")
+library(ggplot2)
+
+actual_lambda_levels <- c("0.09", "0.19", "0.39", "0.59", "0.79", "9.99", "14.99")  
+user_colors <- c(
+  "#4F2982", #  (Deep Indigo)
+  "#3B82A1", #  (Steel Blue)
+  "#00A08A", #  (Teal)
+  "#6DB38B", #  (Seafoam Green)
+  "#A98C63", #  (Camel)
+  "#E2C16A", #  (Ginger Yellow)
+  "#F3E290"  #  (Pale Moon Yellow)
+)
+
+
+selected_palette <- setNames(user_colors, actual_lambda_levels)
+
+
+
+plot_rates_normalized <- ggplot(
+  normalized_summary, 
+  aes(x = log_n, y = normalized_log_error, color = as.factor(lambda), group = lambda)
+) +
+ 
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.5) +
+  
+
+  labs(
+    x = "Log(Sample Size, n)",
+    y = "Normalized Log(Mean L2 Error)",
+    color = "Feature Parameter (Lambda)" 
+  ) +
+  scale_color_manual(
+    name = "Feature Parameter (Lambda)", 
+    values = selected_palette
+  ) +
+  
+  
+  theme_bw(base_size = 22) + 
+  theme(
+    
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 16),
+    
+   
+    legend.position = c(0.003, 0.006),
+    legend.justification = c(0, 0),
+    
+   
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.5),
+    legend.key = element_rect(fill = "transparent"),
+    legend.title = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    
+    
+    panel.grid.minor = element_blank()
+  ) +
+  
+  
+  guides(color = guide_legend(ncol = 3))
+
+
+print(plot_rates_normalized)
+
+
+ggsave("../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_estimation_error_vs_lambda.pdf", plot_rates_normalized, width = 8.2, height = 4.5)
+ggsave("../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_estimation_error_vs_lambda.png", plot_rates_normalized, width = 8.2, height = 4.5, dpi = 300)
+```

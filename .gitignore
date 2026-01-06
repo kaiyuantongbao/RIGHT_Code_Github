@@ -1,0 +1,29 @@
+# History files
+.Rhistory
+.Rapp.history
+
+# Session Data
+.RData
+.RDataTmp
+
+# User-specific files
+.Rproj.user/
+
+# R Markdown files
+*.nb.html
+*.html
+
+# Knitr and R Markdown intermediate files
+*_cache/
+/cache/
+
+# R Environment files
+.Renviron
+
+# macOS specific files
+.DS_Store
+*/.DS_Store
+
+# Temporary files created by R packages
+*.utf8.md
+*.knit.md

@@ -1,0 +1,339 @@
+---
+title: "Real Data Analysis: Riboflavin Dataset"
+subtitle: "Comparing RIGHT against other robust and standard methods"
+format: html
+editor: visual
+---
+
+## 1. Data Loading and Preprocessing
+
+In this section, we load the `riboflavin` dataset and perform a robust preprocessing routine to prepare it for analysis.
+
+```{r data-preprocessing}
+library(dplyr)
+library(glmnet)
+library(hdi)
+library(ggplot2)
+source("../../R/solvers.R")
+data(riboflavin)
+
+# Assign to more standard names
+X_raw <- riboflavin$x
+y_raw <- riboflavin$y
+#summary(X_raw[, 1:5])
+cat(sprintf("Dataset loaded: %d samples, %d features.\n", nrow(X_raw), ncol(X_raw)))
+
+# --- 2. Robust Preprocessing ---
+# We use a robust standardization procedure for all methods to ensure a fair
+# comparison while preserving the heavy-tailed nature of the data.
+
+# Center the response variable by its median
+y_centered <- y_raw - median(y_raw)
+
+# Robustly standardize the feature matrix
+# We define a helper function for this
+robust_scale <- function(m) {
+  # Center each column by its median
+  m_centered <- apply(m, 2, function(col) col - median(col))
+  
+  # Scale each column by its Median Absolute Deviation (MAD)
+  # for normally distributed data. We add a small epsilon for stability.
+  mads <- apply(m_centered, 2, mad)
+  m_scaled <- sweep(m_centered, 2, mads, FUN = "/")
+  
+  # Handle columns with zero MAD (constant columns) by setting them to zero
+  m_scaled[ , mads == 0] <- 0
+  
+  return(m_scaled)
+}
+
+X_scaled <- robust_scale(X_raw)
+
+# --- 3. Final Data Objects ---
+# These will be the inputs for all subsequent analyses
+X <- X_scaled
+y <- y_centered
+
+cat("\nData preprocessing complete.\n")
+# Display a summary of the first 5 columns to show the effect of scaling
+summary(X[, 1:5])
+```
+
+## 2. Exploratory Data Analysis: Assessing Heavy Tails
+
+Before comparing the methods, we first investigate the distributional properties of the (raw) response and the features to justify the need for robust estimators.
+
+```{r}
+#| echo: true
+# We use the raw data objects X_raw and y_raw loaded in the first chunk.
+library(moments)
+library(ggplot2)
+
+# --- Analysis of Raw Response y_raw ---
+y_raw_df <- data.frame(y = y_raw)
+p_y_raw_qq <- ggplot(y_raw_df, aes(sample = y)) +
+  stat_qq(color = "red", size = 2.5) +
+  stat_qq_line(linewidth = 1.2) +
+  labs(
+    x = "Theoretical Quantiles (Normal)",
+    y = "Sample Quantiles (response)"
+  ) +
+  theme_minimal(base_size = 20)
+
+print(p_y_raw_qq)
+ggsave("../../results/06_Sixth_real_data/real_data_y_qq.pdf",p_y_raw_qq,height = 4.5,width=10,dpi=300)
+ggsave("../../results/06_Sixth_real_data/real_data_y_qq.png",p_y_raw_qq,height = 4.5,width=10,dpi=300)
+
+# --- Analysis of Raw Features X_raw ---
+cat("Summary of Raw Feature Kurtosis (X_raw):\n")
+raw_kurtosis <- apply(X_raw, 2, kurtosis)
+summary(raw_kurtosis)
+
+kurtosis_raw_df <- data.frame(kurtosis = raw_kurtosis)
+p_x_raw_kurt <- ggplot(kurtosis_raw_df, aes(x = kurtosis)) +
+  geom_histogram(bins = 50, fill = "skyblue", color = "black") +
+  geom_vline(xintercept = 3, color = "blue", linetype = "dashed", linewidth = 1.2) +
+  labs(
+    #title = "Distribution of Kurtosis for Raw Features (X_raw)",
+    x = "Kurtosis",
+    y = "Number of Features"
+  ) +
+  scale_x_log10() +
+  theme_minimal(base_size = 20)
+
+print(p_x_raw_kurt)
+ggsave("../../results/06_Sixth_real_data/real_data_x_kurt.pdf",p_x_raw_kurt,height = 4.5,width=10,dpi=300)
+ggsave("../../results/06_Sixth_real_data/real_data_x_kurt.png",p_x_raw_kurt,height = 4.5,width=10,dpi=300)
+
+summary(y)
+summary(X[,1:5])
+
+```
+
+## 3. Model Training and Hyperparameter Tuning
+
+In this section, we train each model and tune its hyperparameters. We begin by splitting the data into a single, fixed training (80%) and test (20%) set. All hyperparameter tuning is performed exclusively on the training set.
+
+```{r model-tuning-and-fitting}
+# --- 1. Create a Single, Fixed Data Split ---
+set.seed(42) # for reproducibility of the split
+train_proportion <- 0.8
+train_idx <- sample(1:nrow(X), floor(train_proportion * nrow(X)))
+
+X_train <- X[train_idx, ]
+y_train <- y[train_idx]
+X_test <- X[-train_idx, ]
+y_test <- y[-train_idx]
+
+cat(sprintf("Data split into %d training samples and %d test samples.\n", nrow(X_train), nrow(X_test)))
+
+# --- Initialize a list to store the final trained models ---
+final_models <- list()
+
+# ==============================================================================
+# STAGE 1: TUNE INDEPENDENT METHODS
+# ==============================================================================
+cat("\n--- Stage 1: Tuning Lasso, Shrinkage, and Adaptive Huber ---\n")
+
+# --- 1a. Tune and Fit Lasso ---
+cat("Tuning Lasso...\n")
+cv_fit_lasso <- cv.glmnet(X_train, y_train, standardize = FALSE, intercept = FALSE, nfolds = 10)
+lambda_best_lasso <- cv_fit_lasso$lambda.min
+final_models$Lasso <- as.vector(coef(cv_fit_lasso, s = lambda_best_lasso))[-1]
+
+# --- 1b. Tune and Fit Shrinkage ---
+cat("Tuning Shrinkage...\n")
+tau_x_shrinkage <- quantile(abs(X_train), 0.95)
+# y is only centered, not scaled, so tau_y is based on centered y_train
+tau_y_shrinkage <- quantile(abs(y_train), 0.95) 
+X_train_shrunk <- truncate_operator(X_train, tau_x_shrinkage)
+y_train_shrunk <- truncate_operator(y_train, tau_y_shrinkage)
+cv_fit_shrinkage <- cv.glmnet(X_train_shrunk, y_train_shrunk, standardize = FALSE, intercept = FALSE, nfolds = 10)
+lambda_best_shrinkage <- cv_fit_shrinkage$lambda.min
+final_models$Shrinkage <- solver_shrinkage_method(X_train, y_train, tau_x_shrinkage, tau_y_shrinkage, lambda_best_shrinkage)
+
+# --- 1c. Tune and Fit Adaptive Huber ---
+cat("Tuning Adaptive Huber...\n")
+# Step 1: Get initial residuals from the tuned Lasso on the training set
+residuals_init <- y_train - X_train %*% final_models$Lasso
+
+tau_best_huber <- quantile(abs(residuals_init), 0.95)
+
+# Step 2: Tune lambda for Huber using a k-fold CV loop on the TRAINING data
+k_folds <- 4
+fold_indices <- sample(cut(seq(1, nrow(X_train)), breaks = k_folds, labels = FALSE))
+lambda_grid_huber <- 10^seq(-2, 1, length.out = 20)
+cv_errors_huber <- sapply(lambda_grid_huber, function(lambda_val) {
+  fold_mses <- sapply(1:k_folds, function(k) {
+    val_fold_idx <- which(fold_indices == k)
+    train_fold_idx <- which(fold_indices != k)
+    
+    theta_tuned <- solver_huber_lasso(X_train[train_fold_idx, ], y_train[train_fold_idx], 
+                                      lambda_val, tau_best_huber, T_max = 250)
+    
+    y_pred_val <- X_train[val_fold_idx, ] %*% theta_tuned
+    mean((y_train[val_fold_idx] - y_pred_val)^2)
+  })
+  mean(fold_mses)
+})
+lambda_best_huber <- lambda_grid_huber[which.min(cv_errors_huber)]
+
+# Final fit of Adaptive Huber on the full training set with best params
+final_models$`Adaptive Huber` <- solver_huber_lasso(X_train, y_train, lambda_best_huber, tau_best_huber, T_max = 500)
+
+# ==============================================================================
+# STAGE 2: DETERMINE SPARSITY AND FIT DEPENDENT METHODS
+# ==============================================================================
+cat("\n--- Stage 2: Determining Sparsity and Fitting RIGHT & IHT ---\n")
+
+# --- 2a. Determine Sparsity 's' from the final Adaptive Huber model ---
+s_from_huber <- sum(final_models$`Adaptive Huber` != 0)
+# Apply a reasonable cap (e.g., max 1/4 of training samples) to avoid overly dense models
+s_from_lasso<-sum(final_models$`Lasso` != 0)
+s_final <- s_from_lasso
+cat(sprintf("Sparsity 's' derived from Adaptive Huber model: %d\n", s_final))
+
+# --- 2b. Fit RIGHT ---
+cat("Fitting RIGHT...\n")
+K_right <- max(1, round( 5/9*log(ncol(X_train) * log(nrow(X_train) / log(ncol(X_train))))))
+final_models$RIGHT <- solver_right(X_train, y_train, s =s_final, eta = 0.01, T_max = 250, 
+                                   K = K_right, grad_func_samplewise = grad_linear_regression_samplewise)
+
+# --- 2c. Fit IHT ---
+cat("Fitting IHT...\n")
+final_models$IHT <- solver_iht(X_train, y_train, s = s_final, eta = 0.01, T_max = 250, 
+                               grad_func = grad_linear_regression)
+
+cat("\n--- All models have been trained on the training data. ---\n")
+saveRDS(final_models,"../../results/06_Sixth_real_data/final_models.rds")
+```
+
+## 4. Performance Evaluation on Test Set
+
+Now that all models are trained and their hyperparameters are tuned, we evaluate their predictive performance on the held-out test set `(X_test, y_test)`. We use Mean Absolute Error (MAE) as our primary metric, as it is robust to potential outliers in the test set responses.\`
+
+```{r}
+# --- 1. Calculate MAE for each model ---
+mae_results <- sapply(final_models, function(beta_hat) {
+  # Handle cases where a solver might have failed and returned NA
+  if (any(is.na(beta_hat))) {
+    return(NA_real_)
+  }
+  
+  # Predict on the test set
+  y_pred <- X_test %*% beta_hat
+  
+  # Calculate Mean Absolute Error
+  mae <- mean(abs(y_test - y_pred))
+  
+  return(mae)
+})
+
+
+
+# --- 2. Format and Display Results ---
+# Convert to a data frame for nice printing
+results_df <- data.frame(
+  Method = names(mae_results),
+  MAE = mae_results
+) %>%
+  arrange(MAE) # Sort by MAE to see the best performing method on top
+
+cat("--- Predictive Performance on Test Set ---\n")
+print(results_df)
+
+# --- 3. Visualize the Comparison ---
+p_mae <- ggplot(results_df, aes(x = reorder(Method, MAE), y = MAE, fill = Method)) +
+  geom_col() +
+  geom_text(aes(label = round(MAE, 4)), vjust = -0.3, size = 4) +
+  labs(
+    title = "Model Performance on Riboflavin Test Set",
+    x = "Method",
+    y = "Mean Absolute Error (MAE)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none") # No legend needed as x-axis is clear
+
+print(p_mae)
+
+cat("shrinkage_s:",sum(final_models$`Shrinkage` != 0),"\n")
+cat("Adaptive Huber_s",sum(final_models$`Adaptive Huber` != 0),"\n")
+cat("IHT_s",sum(final_models$`IHT` != 0),"\n")
+cat("RIGHT_s",sum(final_models$`RIGHT` != 0),"\n")
+cat("lasso_s",sum(final_models$`Lasso` != 0),"\n")
+
+```
+
+### 4.1 Residual Analysis for the Best Model (RIGHT)
+
+To further understand the behavior of our best-performing model, we analyze the distribution of its residuals on the test set. A Q-Q plot helps us visualize whether the residuals follow a normal distribution or exhibit heavy tails.
+
+```{r residual-analysis}
+# --- 1. Calculate the Residuals for the RIGHT model ---
+# Get the final trained RIGHT model from our list
+beta_hat_right <- final_models$RIGHT
+
+# Predict on the test set
+y_pred_right <- X %*% beta_hat_right
+
+# Calculate the residuals
+residuals_right <- y - y_pred_right
+
+# Create a data frame for plotting
+residuals_df <- data.frame(residuals = residuals_right)
+
+# --- 2. Create the Q-Q Plot ---
+p_residuals_qq <- ggplot(residuals_df, aes(sample = residuals)) +
+  stat_qq(color = "darkcyan", size = 2.5) +
+  stat_qq_line(linewidth = 1.2, color = "black") +
+  labs(
+    #title = "Q-Q Plot of Residuals for the RIGHT Model",
+    #subtitle = "Comparison against a Normal Distribution on the Test Set",
+    x = "Theoretical Quantiles (Normal)",
+    y = "Sample Quantiles (Residuals)"
+  ) +
+  theme_minimal(base_size = 20)
+
+print(p_residuals_qq)
+ggsave("../../results/06_Sixth_real_data/real_data_residuals_qq.pdf",p_residuals_qq,height = 4.5,width=10,dpi=300)
+ggsave("../../results/06_Sixth_real_data/real_data_residuals_qq.png",p_residuals_qq,height = 4.5,width=10,dpi=300)
+
+# --- 3. (Optional) Formal Test for Normality ---
+# The Shapiro-Wilk test is a formal test for normality.
+# The null hypothesis is that the data is normally distributed.
+# A small p-value (< 0.05) suggests we can reject the null hypothesis.
+shapiro_test_result <- shapiro.test(residuals_right)
+cat("\n--- Shapiro-Wilk Normality Test on Residuals ---\n")
+print(shapiro_test_result)
+```
+
+计算MSE
+
+```{r}
+mse_results <- sapply(final_models, function(beta_hat) {
+  # Handle cases where a solver might have failed and returned NA
+  if (any(is.na(beta_hat))) {
+    return(NA_real_)
+  }
+  
+  # Predict on the test set
+  y_pred <- X_test %*% beta_hat
+  
+  # Calculate Mean Absolute Error
+  mse <- mean((y_test - y_pred)^2)
+  
+  return(mse)
+})
+
+# --- 2. Format and Display Results ---
+# Convert to a data frame for nice printing
+results_df_mse <- data.frame(
+  Method = names(mse_results),
+  MSE = mse_results
+) %>%
+  arrange(MSE) # Sort by MAE to see the best performing method on top
+
+cat("--- Predictive Performance on Test Set ---\n")
+print(results_df_mse)
+
+```
