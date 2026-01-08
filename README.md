@@ -20,30 +20,30 @@ The repository is structured as follows:
 ### Directory Structures
 
 .
-├── .gitignore                   # Specifies intentionally untracked files to ignore
-├── LICENSE                      # MIT License file
-├── R/                           # Core functions for algorithms and data generation
-│   ├── data_generator.R         # Functions to generate synthetic heavy-tailed data
-│   └── solvers.R                # Implementations of RIGHT, IHT, Shrinkage, Huber-Lasso, etc.
-├── README.md                    # This documentation file
-├── results/                     # Pre-computed results (plots and .rds files) from all simulations
-├── RIGHT_Code_Github.Rproj      # RStudio Project file for easy workspace management
-└── simulations/                 # Scripts to run all experiments presented in the paper
-    ├── 01_First_simulation_linear_model_n_vs_delta/
-    │   ├── 01_generate_param_grid_final.R   # Generates the parameter grid for the HPC experiment
-    │   ├── 02_run_hpc_bundle.R              # Main R script executed by each HPC job
-    │   ├── 03_aggregate_and_plot.R          # Aggregates raw HPC results and generates plots
-    │   └── submit_bundle.sbatch             # Slurm submission script template for the HPC cluster
-    ├── 02_Second_simulation_comparison_linear/
-    │   └── linear_comparison.qmd            # Compares all methods in the linear regression setting
-    ├── 03_Third_simulation_comparison_multiresponse/
-    │   └── multi_response_comparison.qmd    # Compares all methods in the multi-response regression setting
-    ├── 04_Fourth_simulation_comparison_logistic_model/
-    │   └── logistic_comparison.qmd          # Compares all methods in the logistic regression setting
-    ├── 05_Fifth_simulation_linear_model_n_vs_lambda/
-    │   └── gradient_rate_verification.qmd   # Verifies the theoretical gradient convergence rate
-    └── 06_Sixth_real_data/
-        └── real_data_analysis.qmd           # Performs the analysis on the Riboflavin real dataset
+├── .gitignore                   # Specifies intentionally untracked files to ignore  
+├── LICENSE                      # MIT License file  
+├── R/                           # Core functions for algorithms and data generation  
+│   ├── data_generator.R         # Functions to generate synthetic heavy-tailed data  
+│   └── solvers.R                # Implementations of RIGHT, IHT, Shrinkage, Huber-Lasso, etc.  
+├── README.md                    # This documentation file  
+├── results/                     # Pre-computed results (plots and .rds files) from all simulations  
+├── RIGHT_Code_Github.Rproj      # RStudio Project file for easy workspace management  
+└── simulations/                 # Scripts to run all experiments presented in the paper  
+    ├── 01_First_simulation_linear_model_n_vs_delta/  
+    │   ├── 01_generate_param_grid_final.R   # Generates the parameter grid for the HPC experiment  
+    │   ├── 02_run_hpc_bundle.R              # Main R script executed by each HPC job  
+    │   ├── 03_aggregate_and_plot.R          # Aggregates raw HPC results and generates plots  
+    │   └── submit_bundle.sbatch             # Slurm submission script template for the HPC cluster  
+    ├── 02_Second_simulation_comparison_linear/  
+    │   └── linear_comparison.qmd            # Compares all methods in the linear regression setting  
+    ├── 03_Third_simulation_comparison_multiresponse/  
+    │   └── multi_response_comparison.qmd    # Compares all methods in the multi-response regression setting  
+    ├── 04_Fourth_simulation_comparison_logistic_model/  
+    │   └── logistic_comparison.qmd          # Compares all methods in the logistic regression setting  
+    ├── 05_Fifth_simulation_linear_model_n_vs_lambda/  
+    │   └── gradient_rate_verification.qmd   # Verifies the theoretical gradient convergence rate  
+    └── 06_Sixth_real_data/  
+        └── real_data_analysis.qmd           # Performs the analysis on the Riboflavin real dataset  
 
 ## How to Reproduce the Results
 
@@ -57,19 +57,17 @@ The repository is structured as follows:
 
 ### 2. Local Simulations (Experiments 2-6)
 
-The simulation studies for method comparison and the real data analysis can be run on a standard local machine. 
-Open the Project: Open the RIGHT_Code_Github.Rproj file in RStudio. This will set the correct working directory. 
-Navigate to a Script: Go to the /simulations folder and open the .qmd or .R file for the experiment you wish to reproduce (e.g., /simulations/02_Second_simulation.../linear_comparison.qmd). 
-Run the Script: Execute the code chunks in the script sequentially. The scripts are self-contained and will source the necessary functions from the /R directory. 
-Note: The pre-computed results are already available in the /results folder. The scripts are configured to save their output to the corresponding subfolder within /results. 
+The simulation studies for method comparison and the real data analysis can be run on a standard local machine.   
+Open the Project: Open the RIGHT_Code_Github.Rproj file in RStudio. This will set the correct working directory.   
+Navigate to a Script: Go to the /simulations folder and open the .qmd or .R file for the experiment you wish to reproduce (e.g., /simulations/02_Second_simulation.../linear_comparison.qmd).   
+Run the Script: Execute the code chunks in the script sequentially. The scripts are self-contained and will source the necessary functions from the /R directory.   
+Note: The pre-computed results are already available in the /results folder. The scripts are configured to save their output to the corresponding subfolder within /results.   
 
 ### 3. HPC Simulation (Experiment 1)
 
-The first experiment, which verifies the theoretical convergence rates, requires significant computational resources and was run on a High-Performance Computing (HPC) cluster using a Slurm workload manager. 
-Generate Parameter Grid: Run /simulations/01_.../01_generate_param_grid_final.R locally to create the param_grid_final.rds file.
-Upload to HPC: Upload the entire project folder to your HPC cluster. 
-Configure Slurm Script: Edit the submit_bundle.sbatch script in the /simulations/01_.../ directory. You must update the WORK_DIR variable to point to the project's root directory on your cluster's file system and specify your Conda/R environment. 
-Submit the Job: Submit the job to the Slurm scheduler using sbatch submit_bundle.sbatch. 
-Download and Analyze: Once the jobs are complete, download the raw results from /results/01_.../raw_bundles/ to your local machine. Then, run /simulations/01_.../03_aggregate_and_plot.R locally to aggregate the results and generate the final plots. 
-
-## 
+The first experiment, which verifies the theoretical convergence rates, requires significant computational resources and was run on a High-Performance Computing (HPC) cluster using a Slurm workload manager.   
+Generate Parameter Grid: Run /simulations/01_.../01_generate_param_grid_final.R locally to create the param_grid_final.rds file.  
+Upload to HPC: Upload the entire project folder to your HPC cluster.   
+Configure Slurm Script: Edit the submit_bundle.sbatch script in the /simulations/01_.../ directory. You must update the WORK_DIR variable to point to the project's root directory on your cluster's file system and specify your Conda/R environment.   
+Submit the Job: Submit the job to the Slurm scheduler using sbatch submit_bundle.sbatch.   
+Download and Analyze: Once the jobs are complete, download the raw results from /results/01_.../raw_bundles/ to your local machine. Then, run /simulations/01_.../03_aggregate_and_plot.R locally to aggregate the results and generate the final plots.   
