@@ -15,7 +15,7 @@ cfg <- list(
   T1 = 384,
   T2 = 12,
   m_min = 10,
-  reps = 100,
+  reps = 200,
   seed_base = 20260420L,
   df_X = 2.5,
   scale_X = 1,
@@ -129,8 +129,12 @@ summary_tbl <- raw_results %>%
 
 write.csv(summary_tbl, file.path(out_dir, "summary", "summary_E2_linear_s_sweep.csv"), row.names = FALSE)
 print(summary_tbl)
-
+#summary_tbl<-read.csv(file.path(out_dir, "summary", "summary_E2_linear_s_sweep.csv"))
 library(ggplot2)
-ggplot(data=summary_tbl,mapping = aes(x=s_star,y=log(median_l2),color=method))+
-  geom_line()
+p<-ggplot(data=summary_tbl,mapping = aes(x=s_star,y=log(median_l2),color=method))+
+  geom_line()+
+  labs(x="True Sparsity s star",
+       y="Log Median L2 Error")
+p
 
+ggsave(file.path(out_dir, "summary", "linear_s_vs_methods.pdf"),p,height=7,width=6.5)
