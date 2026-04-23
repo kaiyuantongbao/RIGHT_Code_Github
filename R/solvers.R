@@ -224,33 +224,116 @@ solver_iht <- function(X, y, s, eta, T_max, theta_init = NULL, grad_func) {
 #' @return The estimated sparse parameter vector or matrix.
 #'
 solver_right <- function(X, y, s, eta, T_max, K,
-                         theta_init = NULL, grad_func_samplewise) {
-
+                         theta_init = NULL,
+                         grad_func_samplewise,
+                         record_trace = FALSE,
+                         theta_star = NULL,
+                         record_l2 = !is.null(theta_star),
+                         record_theta = FALSE,
+                         record_support = FALSE,
+                         record_every = 1L,
+                         record_initial = FALSE) {
   # --- Step 1: Initialization ---
   p <- ncol(X)
   is_multi_response <- is.matrix(y)
   m <- if (is_multi_response) ncol(y) else 1
-
+  
   if (is.null(theta_init)) {
     theta_current <- if (is_multi_response) matrix(0, p, m) else rep(0, p)
   } else {
     theta_current <- theta_init
   }
-
-  # --- Step 2: Main Iteration Loop ---
-  for (t in 1:T_max) {
-    # Step 2a: Calculate the ROBUST gradient at the current estimate
-    robust_gradient <- robust_grad_MoM(theta_current, X, y, K, grad_func_samplewise)
-
-    # Step 2b: Perform the gradient descent step
-    theta_updated <- theta_current - eta * robust_gradient
-
-    # Step 2c: Apply the hard thresholding operator
-    theta_current <- hard_threshold(theta_updated, s)
+  
+  if (record_l2 && is.null(theta_star)) {
+    stop("record_l2 = TRUE requires theta_star.")
   }
-
-  # --- Step 3: Return the final estimate ---
-  return(theta_current)
+  
+  record_every <- as.integer(record_every)
+  if (record_every <= 0L) {
+    stop("record_every must be a positive integer.")
+  }
+  
+  # --- Trace containers ---
+  trace_iter <- integer(0)
+  trace_l2 <- numeric(0)
+  theta_path <- list()
+  support_path <- list()
+  
+  l2_dist <- function(a, b) {
+    sqrt(sum((a - b)^2))
+  }
+  
+  get_support <- function(theta) {
+    if (is.matrix(theta)) {
+      which(rowSums(abs(theta)) > 0)
+    } else {
+      which(abs(theta) > 0)
+    }
+  }
+  
+  record_one <- function(t, theta) {
+    trace_iter <<- c(trace_iter, t)
+    
+    if (record_l2) {
+      trace_l2 <<- c(trace_l2, l2_dist(theta, theta_star))
+    }
+    
+    if (record_theta) {
+      theta_path[[length(theta_path) + 1L]] <<- theta
+    }
+    
+    if (record_support) {
+      support_path[[length(support_path) + 1L]] <<- get_support(theta)
+    }
+  }
+  
+  if (record_trace && record_initial) {
+    record_one(0L, theta_current)
+  }
+  
+  # --- Step 2: Main Iteration Loop ---
+  for (t in seq_len(T_max)) {
+    robust_gradient <- robust_grad_MoM(
+      theta = theta_current,
+      X = X,
+      y = y,
+      K = K,
+      grad_func_samplewise = grad_func_samplewise
+    )
+    
+    theta_updated <- theta_current - eta * robust_gradient
+    theta_current <- hard_threshold(theta_updated, s)
+    
+    if (record_trace && (t %% record_every == 0L || t == T_max)) {
+      record_one(t, theta_current)
+    }
+  }
+  
+  # --- Step 3: Return ---
+  if (!record_trace) {
+    return(theta_current)
+  }
+  
+  trace <- data.frame(iteration = trace_iter)
+  
+  if (record_l2) {
+    trace$l2_error <- trace_l2
+  }
+  
+  out <- list(
+    theta = theta_current,
+    trace = trace
+  )
+  
+  if (record_theta) {
+    out$theta_path <- theta_path
+  }
+  
+  if (record_support) {
+    out$support_path <- support_path
+  }
+  
+  return(out)
 }
 
 
