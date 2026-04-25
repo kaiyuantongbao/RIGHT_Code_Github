@@ -3,19 +3,19 @@ library(here)
 source(here("simulations","07_schedule_ablation","utils_schedule_linear.R"))
 
 out_dir <- "results/07_schedule_ablation/E2_linear_s_sweep"
-dir.create(file.path(out_dir, "raw"), recursive = TRUE, showWarnings = FALSE)
-dir.create(file.path(out_dir, "summary"), recursive = TRUE, showWarnings = FALSE)
+#dir.create(file.path(out_dir, "raw"), recursive = TRUE, showWarnings = FALSE)
+#dir.create(file.path(out_dir, "summary"), recursive = TRUE, showWarnings = FALSE)
 
 cfg <- list(
-  n = 2800,
+  n = 3200,
   p = 600,
-  s_star_grid = c(5,10, 15, 20),
-  eta = 0.01,
+  s_star_grid = c(5, 15, 20,30),
+  eta = 0.02,
   c_r = 0.5,
-  T1 = 384,
-  T2 = 12,
+  T1 = 128,
+  T2 = 8,
   m_min = 10,
-  reps = 200,
+  reps = 100,
   seed_base = 20260420L,
   df_X = 2.5,
   scale_X = 1,
@@ -129,7 +129,7 @@ summary_tbl <- raw_results %>%
 
 write.csv(summary_tbl, file.path(out_dir, "summary", "summary_E2_linear_s_sweep.csv"), row.names = FALSE)
 print(summary_tbl)
-#summary_tbl<-read.csv(file.path(out_dir, "summary", "summary_E2_linear_s_sweep.csv"))
+summary_tbl<-read.csv(file.path(out_dir, "summary", "summary_E2_linear_s_sweep.csv"))
 library(ggplot2)
 p<-ggplot(data=summary_tbl,mapping = aes(x=s_star,y=log(median_l2),color=method))+
   geom_line()+
