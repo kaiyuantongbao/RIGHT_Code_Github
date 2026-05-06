@@ -21,17 +21,17 @@ dir.create(file.path(out_dir, "figures"), recursive = TRUE, showWarnings = FALSE
 # ==============================================================================
 
 cfg <- list(
-  n = 3200,
-  p = 600,
-  s_star = 10,
-  s = 20,
+  n = 800,
+  p = 800,
+  s_star = 5,
+  s = 10,
   eta = 0.02,
   
   # Fixed-fraction TS split: n2 = floor(q * n), n1 = n - n2.
   # For this trajectory figure we vary T1 and keep q,T2 fixed.
   # Later tuning scripts will use q_grid = c(0.1, 0.2, 0.25, 0.5).
-  q_grid = c(0.25),
-  T1_grid = c(128, 150, 200),
+  q_grid = c(0.5),
+  T1_grid = c( 150, 175,200),
   T2_grid = c(8),
   m_min = 10,
   reps = 100,
@@ -235,7 +235,7 @@ fd_at_budget_by_rep <- raw_results %>%
   left_join(
     raw_results %>%
       filter(arm_type == "FD") %>%
-      select(rep_id, fd_t = t, fd_l2_error = l2_error),
+      dplyr::select(rep_id, fd_t = t, fd_l2_error = l2_error),
     by = "rep_id"
   ) %>%
   filter(fd_t == T_budget) %>%
@@ -324,12 +324,6 @@ p_compare_without_title <- ggplot(
 
 print(p_compare_without_title)
 
-ggsave(
-  file.path(out_dir, "figures", "TS_vs_FD_trajectory_plot.pdf"),
-  plot = p_compare,
-  width = 10.5,
-  height = 6
-)
 
 
 ggsave(
