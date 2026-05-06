@@ -332,3 +332,230 @@ ggsave(
   width = 10.5,
   height = 6
 )
+
+
+
+
+
+# ==============================================================================
+# Compact table: FD_RIGHT at matched budget vs TS_RIGHT Stage-I/Stage-II endpoint
+# ==============================================================================
+
+library(dplyr)
+
+out_dir <- if (exists("out_dir")) {
+  out_dir
+} else {
+  "results/07_schedule_ablation/TS_vs_FD_trajectory"
+}
+
+if (!exists("raw_results")) {
+  raw_results <- readRDS(file.path(out_dir, "raw", "raw_TS_vs_FD_trajectory.rds"))
+}
+
+#dir.create(file.path(out_dir, "summary"), recursive = TRUE, showWarnings = FALSE)
+
+q25 <- function(x) unname(quantile(x, 0.25, na.rm = TRUE))
+q75 <- function(x) unname(quantile(x, 0.75, na.rm = TRUE))
+
+# ------------------------------------------------------------------------------
+# 1. Extract TS Stage-I endpoint and TS final endpoint, replication by replication
+# ------------------------------------------------------------------------------
+
+ts_by_rep <- raw_results %>%
+  filter(arm_type == "TS", eligible == TRUE, !is.na(t), !is.na(l2_error)) %>%
+  group_by(rep_id, Config) %>%
+  summarise(
+    q = first(q),
+    T1 = first(T1),
+    T2 = first(T2),
+    B = first(T_fd_budget),
+    n1 = first(n1),
+    n2 = first(n2),
+    b2 = first(b2),
+    K1 = first(K1),
+    K2 = first(K2),
+    
+    ts_stage1_l2 = {
+      idx <- which(t <= first(T1))
+      if (length(idx) == 0L) NA_real_ else l2_error[idx[which.max(t[idx])]]
+    },
+    
+    ts_final_l2 = {
+      idx <- which(!is.na(t))
+      if (length(idx) == 0L) NA_real_ else l2_error[idx[which.max(t[idx])]]
+    },
+    
+    ts_final_t = {
+      idx <- which(!is.na(t))
+      if (length(idx) == 0L) NA_real_ else max(t[idx], na.rm = TRUE)
+    },
+    
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ts_stage2_drop_pct = 100 * (1 - ts_final_l2 / ts_stage1_l2)
+  )
+
+# ------------------------------------------------------------------------------
+# 2. Extract FD error at the matched budget B for each TS configuration
+#    If FD trace does not record every integer t, this uses the largest recorded
+#    FD t not exceeding B.
+# ------------------------------------------------------------------------------
+
+fd_trace <- raw_results %>%
+  filter(arm_type == "FD", !is.na(t), !is.na(l2_error)) %>%
+  transmute(
+    rep_id,
+    fd_t = t,
+    fd_l2 = l2_error
+  )
+
+fd_at_budget_by_rep <- ts_by_rep %>%
+  dplyr::select(rep_id, Config, B) %>%
+  left_join(fd_trace, by = "rep_id") %>%
+  filter(fd_t <= B) %>%
+  group_by(rep_id, Config, B) %>%
+  slice_max(order_by = fd_t, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+paired_by_rep <- ts_by_rep %>%
+  left_join(
+    fd_at_budget_by_rep %>%
+      dplyr::select(rep_id, Config, B, fd_eval_t = fd_t, fd_l2),
+    by = c("rep_id", "Config", "B")
+  ) %>%
+  mutate(
+    fd_over_ts = fd_l2 / ts_final_l2,
+    ts_reduction_vs_fd_pct = 100 * (1 - ts_final_l2 / fd_l2)
+  )
+
+write.csv(
+  paired_by_rep,
+  file.path(out_dir, "summary", "compact_table_by_rep.csv"),
+  row.names = FALSE
+)
+
+# ------------------------------------------------------------------------------
+# 3. Numeric summary for checking and manual replacement in LaTeX
+# ------------------------------------------------------------------------------
+
+compact_summary <- paired_by_rep %>%
+  # Group by core configuration parameters only
+  group_by(Config, q, T1, T2) %>%
+  summarise(
+    # Calculate median L2 errors (removing all q25/q75 calculations as requested)
+    fd_median_l2 = median(fd_l2, na.rm = TRUE),
+    ts_stage1_median_l2 = median(ts_stage1_l2, na.rm = TRUE),
+    ts_final_median_l2 = median(ts_final_l2, na.rm = TRUE),
+    
+    # Calculate the median percentage drop for Stage II
+    median_stage2_drop_pct = median(ts_stage2_drop_pct, na.rm = TRUE),
+    
+    # Optional relative metrics for sanity check
+    median_fd_over_ts = median(fd_over_ts, na.rm = TRUE),
+    median_ts_reduction_vs_fd_pct = median(ts_reduction_vs_fd_pct, na.rm = TRUE),
+    
+    n_rep = n_distinct(rep_id),
+    .groups = "drop"
+  ) %>%
+  # Sort by hyper-parameters to ensure chronological tabular output
+  arrange(T1, T2, q)
+
+write.csv(
+  compact_summary,
+  file.path(out_dir, "summary", "compact_table_summary_numeric.csv"),
+  row.names = FALSE
+)
+
+print(compact_summary)
+
+
+# ------------------------------------------------------------------------------
+# 4. Generate a compact LaTeX tabular fragment (Column-based layout)
+# ------------------------------------------------------------------------------
+
+digits <- 3
+
+# Helper function: Format numbers with fixed digits, return "--" for NAs
+fmt_num <- function(x, digits = 3) {
+  ifelse(
+    is.na(x),
+    "--",
+    formatC(x, format = "f", digits = digits)
+  )
+}
+
+# Helper function: Wrap number in LaTeX math mode, apply bold conditionally
+fmt_error <- function(m, bold = FALSE, digits = 3) {
+  m_s <- fmt_num(m, digits)
+  if (bold) {
+    sprintf("$\\mathbf{%s}$", m_s)
+  } else {
+    sprintf("$%s$", m_s)
+  }
+}
+
+# Helper function: Format the percentage drop/increase with arrows
+fmt_drop <- function(x) {
+  if (is.na(x)) return("")
+  if (x >= 0) {
+    sprintf("$\\downarrow %.1f\\%%$", x)
+  } else {
+    sprintf("$\\uparrow %.1f\\%%$", abs(x))
+  }
+}
+
+# Generate row strings for the LaTeX table
+latex_rows <- compact_summary %>%
+  rowwise() %>%
+  transmute(
+    # Column 1: Method Configuration
+    Method = sprintf(
+      "$\\mathrm{TS}_{\\mathrm{RIGHT}}$ ($q=%.2f$, $(T_1,T_2)=(%d,%d)$)",
+      q, T1, T2
+    ),
+    
+    # Column 2: FD final error (Baseline placed in a column instead of a row)
+    FD_Final = fmt_error(fd_median_l2, bold = FALSE, digits = digits),
+    
+    # Column 3: TS Stage I error
+    TS_Stage1 = fmt_error(ts_stage1_median_l2, bold = FALSE, digits = digits),
+    
+    # Column 4: TS Final error with stacked percentage drop
+    TS_Final = sprintf(
+      "\\shortstack[c]{%s\\\\{\\scriptsize %s from Stage I}}",
+      fmt_error(ts_final_median_l2, bold = TRUE, digits = digits),
+      fmt_drop(median_stage2_drop_pct)
+    )
+  ) %>%
+  ungroup() %>%
+  # Concatenate columns with ' & ' and append '\\' for LaTeX newline
+  mutate(
+    latex = paste(Method, FD_Final, TS_Stage1, TS_Final, sep = " & "),
+    latex = paste0(latex, " \\\\")
+  )
+
+# Construct the complete LaTeX table environment
+latex_fragment <- c(
+  "% Required packages: booktabs, array",
+  "\\scriptsize",
+  "\\setlength{\\tabcolsep}{4pt}",       # Slightly increased padding for readability
+  "\\renewcommand{\\arraystretch}{1.2}", # Slightly increased height to accommodate \shortstack
+  "\\begin{tabular}{lccc}",              # 4 columns: Left, Center, Center, Center
+  "\\toprule",
+  # Updated Header: FD is now explicitly labeled as a column
+  "Method & $\\mathrm{FD}_{\\mathrm{RIGHT}}$ (Matched Budget) & Stage-I endpoint & Final / Stage-II endpoint \\\\",
+  "\\midrule",
+  latex_rows$latex,
+  "\\bottomrule",
+  "\\end{tabular}"
+)
+
+writeLines(
+  latex_fragment,
+  file.path(out_dir, "summary", "compact_budget_table_fragment.tex")
+)
+
+# Print output to console for immediate preview
+cat(paste(latex_fragment, collapse = "\n"))

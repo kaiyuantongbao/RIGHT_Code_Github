@@ -44,8 +44,8 @@ cfg <- list(
   experiment_id = "E2_linear_s_sweep",
   model = "linear",
   
-  n = 3200,
-  p = 600,
+  n = 1800,
+  p = 1800,
   s_star_grid = c(5, 15, 20, 30),
   s_multiplier = 2,
   theta_magnitude = 5,
@@ -54,8 +54,8 @@ cfg <- list(
   m_min = 10,
   
   # TS schedule tuning grid.
-  q_grid = c(0.1, 0.2, 0.25, 0.5),
-  T1_grid = c(128, 150, 200),
+  q_grid = c(0.2, 0.25, 0.5),
+  T1_grid = c( 150, 175, 200),
   T2_grid = c(8, 12),
   
   # Tuning rule: select the minimum-budget schedule among candidates whose
@@ -178,8 +178,8 @@ diagnose_ts_grid <- function(
     s,
     s_ref = s,
     m_min = 10,
-    c_K1 = 1,
-    c_K2 = 1,
+    c_K1 = 0.5,
+    c_K2 = 0.5,
     enforce_tail_lower = TRUE
 ) {
   required_cols <- c("q", "T1", "T2")
@@ -255,8 +255,8 @@ filter_ts_grid_for_tuning <- function(
     s,
     s_ref = s,
     m_min = 10,
-    c_K1 = 1,
-    c_K2 = 1,
+    c_K1 = 0.5,
+    c_K2 = 0.5,
     enforce_tail_lower = TRUE,
     relax_tail_if_empty = TRUE
 ) {
@@ -884,18 +884,20 @@ p <- ggplot(summary_tbl, aes(x = s_star, y = median_l2, color = method, group = 
 
 print(p)
 
+saveRDS(p, file = file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2.rds"))
+
 ggsave(
   filename = file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2.pdf"),
   plot = p,
-  width = 7,
-  height = 5
+  width = 5,
+  height = 6
 )
 
 ggsave(
   filename = file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2.png"),
   plot = p,
-  width = 7,
-  height = 5,
+  width = 5,
+  height = 6,
   dpi = 300
 )
 
@@ -903,3 +905,41 @@ message("Done. Raw results saved to: ", raw_file)
 message("Summary saved to: ", summary_file)
 message("Selected schedules saved to: ", schedule_out_file)
 message("Registry file: ", registry_file)
+
+
+# Change color of the plot
+
+library(ggplot2)
+ p <- readRDS(file = file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2.rds"))
+p_modified <- p + 
+  scale_color_manual(values = c("#332288", "#44AA99", "#CAB54B")) +
+  labs(y = "Median L2 error")+
+  theme_bw(base_size = 16) + 
+  theme(
+    axis.title = element_text(size = 18), 
+    legend.title = element_text(size = 16), 
+    legend.text = element_text(size = 14),  
+    panel.grid.minor = element_blank(), 
+    strip.background = element_rect(fill = "gray90", color = "black"),
+    strip.text = element_text(size = 14, face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold") 
+  )
+print(p_modified)
+
+saveRDS(p_modified, file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2.rds"))
+ggsave(
+  filename = file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2.pdf"),
+  plot = p_modified,
+  width = 10,
+  
+  height = 4
+)
+
+ggsave(
+  filename = file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2.png"),
+  plot = p_modified,
+  width = 10,
+  height = 4,
+  dpi = 300
+)
