@@ -36,48 +36,48 @@ source(here("simulations", "07_schedule_ablation", "utils_schedule_right.R"))
 
 cfg <- list(
   experiment_id = "linear_TS_vs_baselines_n_sweep",
-
+  
   p = 800,
   n_grid = c(800, 1200, 1600, 2000, 2400),
-
+  
   s_star = 5,
   s = 10,
   m_min = 10,
-
+  
   reps = 100,
   n_pilot = 15,
   seed_base = 20260507L,
-
+  
   df_X = 2.5,
   scale_X = 1,
   df_eps = 1.5,
   scale_eps = 1,
   theta_magnitude = 5,
-
+  
   # TS-RIGHT schedule grid requested by the user.
   q_grid = c(0.50),
   T1_grid = c(150, 200),
   T2_grid = c(8),
   eta_ts = 0.02,
-
+  
   # IHT grid requested by the user.
   iht_eta_grid = c(0.005, 0.01, 0.02),
   iht_T_grid = c(200, 400, 800),
-
+  
   # Baseline tuning grids.
   huber_lambda_grid = 10^seq(-3, 0, length.out = 8),
   huber_tau_quantile_grid = c(0.90, 0.95, 0.98),
   shrink_tau_quantile_grid = c(0.90, 0.95, 0.98),
-
+  
   # Solver iteration lengths for Huber-Lasso. These match the spirit of the old
   # comparison script but can be lowered for smoke tests.
   T_huber_tune = 250,
   T_huber_final = 500,
-
+  
   val_frac = 0.20,
   cv_nfolds = 5,
   selection_alpha = 1.05,
-
+  
   # Parallel control.
   use_parallel = TRUE,
   n_cores = max(1L, parallel::detectCores() - 1L)
@@ -159,7 +159,7 @@ restore_temp_seed <- function(state) {
 make_train_val_split <- function(n, val_frac = 0.2, seed) {
   rng <- with_temp_seed(seed)
   on.exit(restore_temp_seed(rng), add = TRUE)
-
+  
   n_val <- max(1L, floor(val_frac * n))
   val_idx <- sample.int(n, size = n_val, replace = FALSE)
   train_idx <- setdiff(seq_len(n), val_idx)
@@ -170,7 +170,7 @@ make_foldid <- function(n, nfolds = 5, seed = 1L) {
   nfolds <- min(as.integer(nfolds), n)
   rng <- with_temp_seed(seed)
   on.exit(restore_temp_seed(rng), add = TRUE)
-
+  
   foldid <- rep(seq_len(nfolds), length.out = n)
   sample(foldid, size = n, replace = FALSE)
 }
@@ -191,23 +191,23 @@ safe_l2 <- function(theta, theta_star) {
 # ----------------------------------------------------------------------
 
 fit_ts_right_linear_theta <- function(
-  X,
-  y,
-  s,
-  eta,
-  q,
-  T1,
-  T2,
-  m_min,
-  s_ref,
-  seed = NULL
+    X,
+    y,
+    s,
+    eta,
+    q,
+    T1,
+    T2,
+    m_min,
+    s_ref,
+    seed = NULL
 ) {
   rng <- with_temp_seed(seed)
   on.exit(restore_temp_seed(rng), add = TRUE)
-
+  
   n <- nrow(X)
   p <- ncol(X)
-
+  
   budget <- compute_ts_budget(
     n = n,
     p = p,
@@ -218,15 +218,15 @@ fit_ts_right_linear_theta <- function(
     s_ref = s_ref,
     m_min = m_min
   )
-
+  
   if (!budget$eligible) {
     return(list(theta = rep(NA_real_, p), budget = budget, eligible = FALSE))
   }
-
+  
   idx <- sample.int(n)
   id1 <- idx[seq_len(budget$n1)]
   id2 <- idx[(budget$n1 + 1L):n]
-
+  
   theta_cur <- solver_right(
     X = X[id1, , drop = FALSE],
     y = y[id1],
@@ -238,10 +238,10 @@ fit_ts_right_linear_theta <- function(
     grad_func_samplewise = grad_linear_regression_samplewise,
     record_trace = FALSE
   )
-
+  
   use_n2 <- budget$b2 * T2
   id2 <- sample(id2, size = length(id2), replace = FALSE)[seq_len(use_n2)]
-
+  
   for (tt in seq_len(T2)) {
     batch_ids <- id2[((tt - 1L) * budget$b2 + 1L):(tt * budget$b2)]
     theta_cur <- solver_right(
@@ -256,7 +256,7 @@ fit_ts_right_linear_theta <- function(
       record_trace = FALSE
     )
   }
-
+  
   list(theta = as.numeric(theta_cur), budget = budget, eligible = TRUE)
 }
 
@@ -295,35 +295,35 @@ fit_lasso_cv <- function(X, y, seed, nfolds = 5) {
 }
 
 fit_huber_lasso_tuned <- function(
-  X_full,
-  y_full,
-  train_idx,
-  lambda_grid,
-  tau_quantile_grid,
-  val_alpha = 1.05,
-  T_tune = 250,
-  T_final = 500,
-  seed = 1L,
-  nfolds = 5
+    X_full,
+    y_full,
+    train_idx,
+    lambda_grid,
+    tau_quantile_grid,
+    val_alpha = 1.05,
+    T_tune = 250,
+    T_final = 500,
+    seed = 1L,
+    nfolds = 5
 ) {
   X_train <- X_full[train_idx, , drop = FALSE]
   y_train <- y_full[train_idx]
   val_idx <- setdiff(seq_len(nrow(X_full)), train_idx)
   X_val <- X_full[val_idx, , drop = FALSE]
   y_val <- y_full[val_idx]
-
+  
   # Lasso initialization for residual-adaptive Huber thresholds.
   init_train <- fit_lasso_cv(X_train, y_train, seed = seed + 11L, nfolds = nfolds)
   beta_init_train <- init_train$theta
   resid_train <- as.numeric(y_train - X_train %*% beta_init_train)
-
+  
   cand <- list()
   cc <- 0L
-
+  
   for (tau_q in tau_quantile_grid) {
     tau_val <- as.numeric(quantile(abs(resid_train), probs = tau_q, na.rm = TRUE))
     tau_val <- max(tau_val, 1e-8)
-
+    
     for (lambda_val in lambda_grid) {
       cc <- cc + 1L
       theta_tmp <- tryCatch(
@@ -337,7 +337,7 @@ fit_huber_lasso_tuned <- function(
         ),
         error = function(e) rep(NA_real_, ncol(X_full))
       )
-
+      
       cand[[cc]] <- data.frame(
         tau_q = tau_q,
         tau = tau_val,
@@ -346,14 +346,14 @@ fit_huber_lasso_tuned <- function(
       )
     }
   }
-
+  
   cand_df <- dplyr::bind_rows(cand)
   cand_df <- cand_df[is.finite(cand_df$val_loss), , drop = FALSE]
-
+  
   if (nrow(cand_df) == 0L) {
     return(list(theta = rep(NA_real_, ncol(X_full)), selected = data.frame()))
   }
-
+  
   best <- min(cand_df$val_loss, na.rm = TRUE)
   near <- cand_df[cand_df$val_loss <= val_alpha * best, , drop = FALSE]
   # Simpler model preference: choose the largest lambda among near-best candidates;
@@ -361,13 +361,13 @@ fit_huber_lasso_tuned <- function(
   near$dist_tau_center <- abs(near$tau_q - 0.95)
   near <- near[order(-near$lambda, near$dist_tau_center, near$val_loss), , drop = FALSE]
   chosen <- near[1, , drop = FALSE]
-
+  
   init_full <- fit_lasso_cv(X_full, y_full, seed = seed + 17L, nfolds = nfolds)
   beta_init_full <- init_full$theta
   resid_full <- as.numeric(y_full - X_full %*% beta_init_full)
   tau_full <- as.numeric(quantile(abs(resid_full), probs = chosen$tau_q, na.rm = TRUE))
   tau_full <- max(tau_full, 1e-8)
-
+  
   theta_final <- tryCatch(
     solver_huber_lasso(
       X = X_full,
@@ -379,38 +379,38 @@ fit_huber_lasso_tuned <- function(
     ),
     error = function(e) rep(NA_real_, ncol(X_full))
   )
-
+  
   chosen$tau_final <- tau_full
   list(theta = as.numeric(theta_final), selected = chosen)
 }
 
 fit_shrinkage_tuned <- function(
-  X_full,
-  y_full,
-  train_idx,
-  tau_quantile_grid,
-  val_alpha = 1.05,
-  seed = 1L,
-  nfolds = 5
+    X_full,
+    y_full,
+    train_idx,
+    tau_quantile_grid,
+    val_alpha = 1.05,
+    seed = 1L,
+    nfolds = 5
 ) {
   X_train <- X_full[train_idx, , drop = FALSE]
   y_train <- y_full[train_idx]
   val_idx <- setdiff(seq_len(nrow(X_full)), train_idx)
   X_val <- X_full[val_idx, , drop = FALSE]
   y_val <- y_full[val_idx]
-
+  
   cand <- list()
   cc <- 0L
-
+  
   for (tau_q in tau_quantile_grid) {
     tau_x <- as.numeric(quantile(abs(X_train), probs = tau_q, na.rm = TRUE))
     tau_y <- as.numeric(quantile(abs(y_train), probs = tau_q, na.rm = TRUE))
     tau_x <- max(tau_x, 1e-8)
     tau_y <- max(tau_y, 1e-8)
-
+    
     X_train_shrunk <- truncate_operator(X_train, tau_x)
     y_train_shrunk <- truncate_operator(y_train, tau_y)
-
+    
     theta_tmp <- tryCatch({
       foldid <- make_foldid(nrow(X_train), nfolds = nfolds, seed = seed + as.integer(1000 * tau_q))
       cv_fit <- cv.glmnet(
@@ -426,7 +426,7 @@ fit_shrinkage_tuned <- function(
     }, error = function(e) {
       list(theta = rep(NA_real_, ncol(X_full)), lambda = NA_real_)
     })
-
+    
     cc <- cc + 1L
     cand[[cc]] <- data.frame(
       tau_q = tau_q,
@@ -436,30 +436,30 @@ fit_shrinkage_tuned <- function(
       val_loss = median_abs_prediction_error(theta_tmp$theta, X_val, y_val)
     )
   }
-
+  
   cand_df <- dplyr::bind_rows(cand)
   cand_df <- cand_df[is.finite(cand_df$val_loss), , drop = FALSE]
-
+  
   if (nrow(cand_df) == 0L) {
     return(list(theta = rep(NA_real_, ncol(X_full)), selected = data.frame()))
   }
-
+  
   best <- min(cand_df$val_loss, na.rm = TRUE)
   near <- cand_df[cand_df$val_loss <= val_alpha * best, , drop = FALSE]
   near$dist_tau_center <- abs(near$tau_q - 0.95)
   near <- near[order(near$dist_tau_center, near$val_loss), , drop = FALSE]
   chosen <- near[1, , drop = FALSE]
-
+  
   tau_x_full <- as.numeric(quantile(abs(X_full), probs = chosen$tau_q, na.rm = TRUE))
   tau_y_full <- as.numeric(quantile(abs(y_full), probs = chosen$tau_q, na.rm = TRUE))
   tau_x_full <- max(tau_x_full, 1e-8)
   tau_y_full <- max(tau_y_full, 1e-8)
-
+  
   theta_final <- tryCatch(
     solver_shrinkage_method(X_full, y_full, tau_x_full, tau_y_full, chosen$lambda),
     error = function(e) rep(NA_real_, ncol(X_full))
   )
-
+  
   chosen$tau_x_final <- tau_x_full
   chosen$tau_y_final <- tau_y_full
   list(theta = as.numeric(theta_final), selected = chosen)
@@ -517,7 +517,7 @@ make_iht_signature <- function(n, cfg) {
 tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_dir) {
   signature <- make_ts_signature(n, cfg)
   config_id <- make_short_config_id("TS", signature, n)
-
+  
   registry <- read_registry(registry_path)
   if (nrow(registry) > 0L) {
     hit <- registry[registry$config_id == config_id & registry$method == "TS-RIGHT", , drop = FALSE]
@@ -526,15 +526,15 @@ tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_
       return(hit[1, , drop = FALSE])
     }
   }
-
+  
   message("Running pilot TS tuning for n = ", n, ": ", config_id)
-
+  
   grid <- make_ts_grid(
     q_grid = cfg$q_grid,
     T1_grid = cfg$T1_grid,
     T2_grid = cfg$T2_grid
   )
-
+  
   # Budget diagnostics on the full n. Actual pilot fitting uses the training split.
   budget_diag <- lapply(seq_len(nrow(grid)), function(ii) {
     b <- compute_ts_budget(
@@ -560,26 +560,26 @@ tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_
       eligible = b$eligible
     )
   }) %>% dplyr::bind_rows()
-
+  
   write.csv(
     budget_diag,
     file.path(candidate_dir, paste0("ts_budget_diag_", config_id, ".csv")),
     row.names = FALSE
   )
-
+  
   pilot_rows <- list()
   rr <- 0L
-
+  
   for (ii in seq_len(nrow(grid))) {
     q_i <- grid$q[ii]
     T1_i <- grid$T1[ii]
     T2_i <- grid$T2[ii]
-
+    
     for (pilot_id in seq_len(cfg$n_pilot)) {
       seed_data <- seed_for(cfg$seed_base, n_index, pilot_id, offset = 100000L)
       seed_split <- seed_for(cfg$seed_base, n_index, pilot_id, offset = 200000L)
       seed_algo <- seed_for(cfg$seed_base, n_index, pilot_id, offset = 300000L)
-
+      
       dat <- gen_one_linear_dataset(
         seed = seed_data,
         n = n,
@@ -591,13 +591,13 @@ tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_
         df_eps = cfg$df_eps,
         scale_eps = cfg$scale_eps
       )
-
+      
       split <- make_train_val_split(n = n, val_frac = cfg$val_frac, seed = seed_split)
       X_train <- dat$X[split$train, , drop = FALSE]
       y_train <- dat$y[split$train]
       X_val <- dat$X[split$val, , drop = FALSE]
       y_val <- dat$y[split$val]
-
+      
       fit <- fit_ts_right_linear_theta(
         X = X_train,
         y = y_train,
@@ -610,7 +610,7 @@ tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_
         s_ref = cfg$s_star,
         seed = seed_algo
       )
-
+      
       rr <- rr + 1L
       pilot_rows[[rr]] <- data.frame(
         config_id = config_id,
@@ -627,14 +627,14 @@ tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_
       )
     }
   }
-
+  
   pilot_raw <- dplyr::bind_rows(pilot_rows)
   write.csv(
     pilot_raw,
     file.path(candidate_dir, paste0("ts_candidate_raw_", config_id, ".csv")),
     row.names = FALSE
   )
-
+  
   pilot_summary <- pilot_raw %>%
     group_by(q, T1, T2) %>%
     summarise(
@@ -644,22 +644,22 @@ tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_
       .groups = "drop"
     ) %>%
     left_join(budget_diag, by = c("q", "T1", "T2"))
-
+  
   write.csv(
     pilot_summary,
     file.path(candidate_dir, paste0("ts_candidate_summary_", config_id, ".csv")),
     row.names = FALSE
   )
-
+  
   valid <- pilot_summary[is.finite(pilot_summary$pilot_median) & pilot_summary$eligible, , drop = FALSE]
   if (nrow(valid) == 0L) stop("No valid TS candidate for n = ", n)
-
+  
   best <- min(valid$pilot_median, na.rm = TRUE)
   near <- valid[valid$pilot_median <= cfg$selection_alpha * best, , drop = FALSE]
   near$dist_center <- abs(near$q - 0.5) + abs(near$T1 - 150) / 150 + abs(near$T2 - 8) / 8
   near <- near[order(near$T_fd_budget, near$dist_center, near$pilot_median), , drop = FALSE]
   chosen <- near[1, , drop = FALSE]
-
+  
   row <- data.frame(
     config_id = config_id,
     config_signature = signature,
@@ -694,7 +694,7 @@ tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_
     selection_rule = "within_1.05_best_then_min_budget",
     seed_base = cfg$seed_base
   )
-
+  
   append_registry_row(row, registry_path)
   row
 }
@@ -702,7 +702,7 @@ tune_ts_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_
 tune_iht_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate_dir) {
   signature <- make_iht_signature(n, cfg)
   config_id <- make_short_config_id("IHT", signature, n)
-
+  
   registry <- read_registry(registry_path)
   if (nrow(registry) > 0L) {
     hit <- registry[registry$config_id == config_id & registry$method == "IHT", , drop = FALSE]
@@ -711,27 +711,27 @@ tune_iht_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate
       return(hit[1, , drop = FALSE])
     }
   }
-
+  
   message("Running pilot IHT tuning for n = ", n, ": ", config_id)
-
+  
   grid <- expand.grid(
     eta = cfg$iht_eta_grid,
     T = cfg$iht_T_grid,
     KEEP.OUT.ATTRS = FALSE,
     stringsAsFactors = FALSE
   )
-
+  
   pilot_rows <- list()
   rr <- 0L
-
+  
   for (ii in seq_len(nrow(grid))) {
     eta_i <- grid$eta[ii]
     T_i <- grid$T[ii]
-
+    
     for (pilot_id in seq_len(cfg$n_pilot)) {
       seed_data <- seed_for(cfg$seed_base, n_index, pilot_id, offset = 400000L)
       seed_split <- seed_for(cfg$seed_base, n_index, pilot_id, offset = 500000L)
-
+      
       dat <- gen_one_linear_dataset(
         seed = seed_data,
         n = n,
@@ -743,18 +743,18 @@ tune_iht_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate
         df_eps = cfg$df_eps,
         scale_eps = cfg$scale_eps
       )
-
+      
       split <- make_train_val_split(n = n, val_frac = cfg$val_frac, seed = seed_split)
       X_train <- dat$X[split$train, , drop = FALSE]
       y_train <- dat$y[split$train]
       X_val <- dat$X[split$val, , drop = FALSE]
       y_val <- dat$y[split$val]
-
+      
       theta_hat <- tryCatch(
         fit_iht_linear_theta(X_train, y_train, s = cfg$s, eta = eta_i, T = T_i),
         error = function(e) rep(NA_real_, cfg$p)
       )
-
+      
       rr <- rr + 1L
       pilot_rows[[rr]] <- data.frame(
         config_id = config_id,
@@ -768,14 +768,14 @@ tune_iht_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate
       )
     }
   }
-
+  
   pilot_raw <- dplyr::bind_rows(pilot_rows)
   write.csv(
     pilot_raw,
     file.path(candidate_dir, paste0("iht_candidate_raw_", config_id, ".csv")),
     row.names = FALSE
   )
-
+  
   pilot_summary <- pilot_raw %>%
     group_by(eta, T) %>%
     summarise(
@@ -784,22 +784,22 @@ tune_iht_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate
       fail_rate = mean(!is.finite(val_loss)),
       .groups = "drop"
     )
-
+  
   write.csv(
     pilot_summary,
     file.path(candidate_dir, paste0("iht_candidate_summary_", config_id, ".csv")),
     row.names = FALSE
   )
-
+  
   valid <- pilot_summary[is.finite(pilot_summary$pilot_median), , drop = FALSE]
   if (nrow(valid) == 0L) stop("No valid IHT candidate for n = ", n)
-
+  
   best <- min(valid$pilot_median, na.rm = TRUE)
   near <- valid[valid$pilot_median <= cfg$selection_alpha * best, , drop = FALSE]
   near$dist_eta_center <- abs(log(near$eta) - log(0.01))
   near <- near[order(near$T, near$dist_eta_center, near$pilot_median), , drop = FALSE]
   chosen <- near[1, , drop = FALSE]
-
+  
   row <- data.frame(
     config_id = config_id,
     config_signature = signature,
@@ -825,7 +825,7 @@ tune_iht_for_n <- function(n, n_index, theta_star, cfg, registry_path, candidate
     selection_rule = "within_1.05_best_then_min_T",
     seed_base = cfg$seed_base
   )
-
+  
   append_registry_row(row, registry_path)
   row
 }
@@ -853,7 +853,7 @@ for (jj in seq_along(cfg$n_grid)) {
     registry_path = registry_path,
     candidate_dir = candidate_dir
   )
-
+  
   selected_iht[[as.character(n_val)]] <- tune_iht_for_n(
     n = n_val,
     n_index = jj,
@@ -884,7 +884,7 @@ fit_one_final_rep <- function(n, n_index, rep_id, theta_star, cfg, selected_ts_d
   seed_lasso <- seed_for(cfg$seed_base, n_index, rep_id, offset = 900000L)
   seed_huber <- seed_for(cfg$seed_base, n_index, rep_id, offset = 1000000L)
   seed_shrink <- seed_for(cfg$seed_base, n_index, rep_id, offset = 1100000L)
-
+  
   dat <- gen_one_linear_dataset(
     seed = seed_data,
     n = n,
@@ -896,14 +896,14 @@ fit_one_final_rep <- function(n, n_index, rep_id, theta_star, cfg, selected_ts_d
     df_eps = cfg$df_eps,
     scale_eps = cfg$scale_eps
   )
-
+  
   X <- dat$X
   y <- dat$y
   split <- make_train_val_split(n = n, val_frac = cfg$val_frac, seed = seed_split)
   train_idx <- split$train
-
+  
   rows <- list()
-
+  
   # TS-RIGHT, frozen per n.
   ts_par <- selected_ts_df[selected_ts_df$n == n, , drop = FALSE][1, ]
   t0 <- proc.time()[3]
@@ -941,7 +941,7 @@ fit_one_final_rep <- function(n, n_index, rep_id, theta_star, cfg, selected_ts_d
     tau = NA_real_,
     tau_q = NA_real_
   )
-
+  
   # IHT, frozen per n.
   iht_par <- selected_iht_df[selected_iht_df$n == n, , drop = FALSE][1, ]
   t0 <- proc.time()[3]
@@ -977,7 +977,7 @@ fit_one_final_rep <- function(n, n_index, rep_id, theta_star, cfg, selected_ts_d
     tau = NA_real_,
     tau_q = NA_real_
   )
-
+  
   # Lasso via cv.glmnet on the full dataset.
   t0 <- proc.time()[3]
   fit_lasso <- tryCatch(
@@ -1006,7 +1006,7 @@ fit_one_final_rep <- function(n, n_index, rep_id, theta_star, cfg, selected_ts_d
     tau = NA_real_,
     tau_q = NA_real_
   )
-
+  
   # Adaptive Huber-Lasso via validation median absolute prediction error.
   t0 <- proc.time()[3]
   fit_huber <- fit_huber_lasso_tuned(
@@ -1051,7 +1051,7 @@ fit_one_final_rep <- function(n, n_index, rep_id, theta_star, cfg, selected_ts_d
     tau = huber_tau,
     tau_q = huber_tau_q
   )
-
+  
   # Shrinkage/truncation baseline.
   t0 <- proc.time()[3]
   fit_shrink <- fit_shrinkage_tuned(
@@ -1093,7 +1093,7 @@ fit_one_final_rep <- function(n, n_index, rep_id, theta_star, cfg, selected_ts_d
     tau = shrink_tau,
     tau_q = shrink_tau_q
   )
-
+  
   dplyr::bind_rows(rows)
 }
 
@@ -1121,7 +1121,7 @@ if (cfg$use_parallel && cfg$n_cores > 1L) {
   on.exit({
     try(parallel::stopCluster(cl), silent = TRUE)
   }, add = TRUE)
-
+  
   raw_results <- foreach(
     ii = seq_len(nrow(param_grid)),
     .combine = dplyr::bind_rows,
