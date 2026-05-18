@@ -1366,8 +1366,8 @@ plot_grouped_quantile_lines <- ggplot(grouped_quantiles, aes(color = method_disp
     data = iht_extreme_marks,
     aes(x = x_pos, y = y_pos, label = label),
     inherit.aes = FALSE,
-    vjust = -0.7,
-    size = 3.0,
+    vjust = 1.5,
+    size = 4.8,
     color = method_palette["IHT"]
   ) +
   scale_x_continuous(
@@ -1399,20 +1399,30 @@ plot_grouped_quantile_lines <- ggplot(grouped_quantiles, aes(color = method_disp
     panel.grid.minor = element_blank(),
     legend.position = "bottom",
     plot.margin = margin(t = 18, r = 18, b = 8, l = 8)
+  )+
+  theme_bw(base_size = 18) + 
+  theme(
+    axis.title = element_text(size = 19), 
+    legend.title = element_text(size = 18), 
+    legend.text = element_text(size = 15),  
+    panel.grid.minor = element_blank(), 
+    legend.position = "bottom",
+    strip.background = element_rect(fill = "gray90", color = "black"),
+    strip.text = element_text(size = 15, face = "bold")
   )
 
 print(plot_grouped_quantile_lines)
 ggsave(
   file.path(plot_saved_fig_dir, "linear_TS_vs_baselines_grouped_quantile_lines.pdf"),
   plot_grouped_quantile_lines,
-  width = 10.5,
-  height = 6
+  width = 11,
+  height = 5.5
 )
 ggsave(
   file.path(plot_saved_fig_dir, "linear_TS_vs_baselines_grouped_quantile_lines.png"),
   plot_grouped_quantile_lines,
-  width = 10.5,
-  height = 6,
+  width = 11,
+  height = 5.5,
   dpi = 300
 )
 saveRDS(plot_grouped_quantile_lines,file.path(plot_saved_fig_dir,"linear_TS_vs_baselines_grouped_quantile_lines.rds"))
