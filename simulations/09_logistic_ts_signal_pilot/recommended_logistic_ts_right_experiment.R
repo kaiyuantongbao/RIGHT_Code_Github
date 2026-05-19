@@ -391,7 +391,6 @@ saveRDS(summary_tbl, file.path(summary_dir, "recommended_logistic_ts_right_summa
 # ----------------------------------------------------------------------
 # Grouped quantile-line plot.
 # ----------------------------------------------------------------------
-
 raw_results_saved <- results
 method_palette <- c(
   "TS-RIGHT" = "#332288",
