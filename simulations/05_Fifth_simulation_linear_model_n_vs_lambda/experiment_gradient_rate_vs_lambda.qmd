@@ -265,3 +265,109 @@ print(plot_rates_normalized)
 ggsave("../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_estimation_error_vs_lambda.pdf", plot_rates_normalized, width = 8.2, height = 4.5)
 ggsave("../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_estimation_error_vs_lambda.png", plot_rates_normalized, width = 8.2, height = 4.5, dpi = 300)
 ```
+
+plot median
+
+```{r}
+results_list<-readRDS("../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_n_vs_lambda_raw_results.rds")
+summary_results <- results_list %>%
+  group_by(n, lambda_moment) %>%
+  summarise(median_grad_error = median(grad_error, na.rm = TRUE), .groups = 'drop') %>%
+  mutate(
+    log_n = log(n),
+    log_error_median = log(median_grad_error),
+
+    lambda_factor = as.factor(paste0("lambda = ", lambda_moment))
+  )
+normalized_summary <- summary_results %>%
+  # Ensure data is sorted by n within each group
+  arrange(lambda_factor, n) %>% 
+  group_by(lambda_factor) %>%
+  mutate(
+    normalized_log_error_median = log_error_median - first(log_error_median)
+  )
+normalized_summary$lambda<-as.numeric(normalized_summary$lambda_moment)-0.01
+normalized_summary$lambda<-as.factor(normalized_summary$lambda)
+# --- Verify the slopes ---
+normalized_summary$lambda<-as.numeric(normalized_summary$lambda_moment)-0.01
+slope_summary <- normalized_summary %>%
+  group_by(lambda) %>%
+  do(model = lm(log_error_median ~ log_n, data = .)) %>%
+  summarise(
+    lambda = lambda,
+    empirical_slope = coef(model)[2],
+    R_2=summary(model)$r.squared,
+    theoretical_slope = pmax(-lambda / (1 + lambda), -0.5)
+  )
+
+cat("\n--- Comparison of Empirical and Theoretical Slopes ---\n")
+print(slope_summary)
+
+library(ggplot2)
+
+actual_lambda_levels <- c("0.09", "0.19", "0.39", "0.59", "0.79", "9.99", "14.99")  
+user_colors <- c(
+  "#4F2982", #  (Deep Indigo)
+  "#3B82A1", #  (Steel Blue)
+  "#00A08A", #  (Teal)
+  "#6DB38B", #  (Seafoam Green)
+  "#A98C63", #  (Camel)
+  "#E2C16A", #  (Ginger Yellow)
+  "#F3E290"  #  (Pale Moon Yellow)
+)
+
+
+selected_palette <- setNames(user_colors, actual_lambda_levels)
+
+
+
+plot_rates_normalized_median <- ggplot(
+  normalized_summary, 
+  aes(x = log_n, y = normalized_log_error_median, color = as.factor(lambda), group = lambda)
+) +
+ 
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.5) +
+  
+
+  labs(
+    x = "Log(Sample Size, n)",
+    y = "Normalized Log(Median L2 Error)",
+    color = "Feature Parameter (Lambda)" 
+  ) +
+  scale_color_manual(
+    name = "Feature Parameter (Lambda)", 
+    values = selected_palette
+  ) +
+  
+  
+  theme_bw(base_size = 22) + 
+  theme(
+    
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 16),
+    
+   
+    legend.position = c(0.003, 0.006),
+    legend.justification = c(0, 0),
+    
+   
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.5),
+    legend.key = element_rect(fill = "transparent"),
+    legend.title = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    
+    
+    panel.grid.minor = element_blank()
+  ) +
+  
+  
+  guides(color = guide_legend(ncol = 3))
+
+
+print(plot_rates_normalized_median)
+
+
+ggsave("../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_estimation_error_vs_lambda_median.pdf", plot_rates_normalized_median, width = 8.2, height = 4.5)
+ggsave("../../results/05_Fifth_simulation_linear_model_n_vs_lambda/gradient_estimation_error_vs_lambda_median.png", plot_rates_normalized_median, width = 8.2, height = 4.5, dpi = 300)
+```

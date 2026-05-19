@@ -943,3 +943,65 @@ ggsave(
   height = 4,
   dpi = 300
 )
+
+##################################################
+#modify the legend
+library(ggplot2)
+library(dplyr)
+out_dir <- "results/07_schedule_ablation/E2_linear_s_sweep"
+summary_file <- file.path(out_dir, "summary", "summary_E2_linear_s_sweep_TS_tuned.csv")
+summary_tbl <- read.csv(summary_file)
+
+# 2. change FD_budget into N and FS into ES
+summary_tbl <- summary_tbl %>%
+  mutate(method = case_when(
+    method == "FD_budget" ~ "NS",
+    method == "FS" ~ "ES",
+    TRUE ~ method
+  ))
+
+# translate method into factors
+summary_tbl$method <- factor(summary_tbl$method, levels = c("TS", "NS", "ES"))
+
+p_modified <- ggplot(summary_tbl, aes(x = s_star, y = median_l2, color = method, group = method)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.2) +
+  scale_y_log10() +
+  # 按照您的要求映射颜色，并确保名称与新修改的标签匹配
+  scale_color_manual(values = c("TS" = "#332288", "NS" = "#44AA99", "ES" = "#CAB54B")) +
+  labs(
+    x = "True sparsity s*",
+    y = "Median L2 error",
+    color = "Method"
+  ) +
+  theme_bw(base_size = 16) + 
+  theme(
+    axis.title = element_text(size = 18), 
+    legend.title = element_text(size = 16), 
+    legend.text = element_text(size = 14),  
+    panel.grid.minor = element_blank(), 
+    strip.background = element_rect(fill = "gray90", color = "black"),
+    strip.text = element_text(size = 14, face = "bold"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold") 
+  )
+
+
+print(p_modified)
+
+saveRDS(p_modified, file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2_renamed.rds"))
+
+ggsave(
+  filename = file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2_renamed.pdf"),
+  plot = p_modified,
+  width = 10,
+  height = 4
+)
+
+ggsave(
+  filename = file.path(out_dir, "figures", "linear_s_sweep_TS_tuned_median_l2_renamed.png"),
+  plot = p_modified,
+  width = 10,
+  height = 4,
+  dpi = 300
+)

@@ -44,12 +44,14 @@ summary_results <- final_results %>%
   group_by(n, p, delta) %>%
   summarise(
     mean_l2_error = mean(l2_error, na.rm = TRUE),
+    median_l2_error=median(l2_error, na.rm = TRUE),
     .groups = 'drop'
   ) %>%
   # Create log-transformed columns for plotting
   mutate(
     log_n = log(n),
     log_error = log(mean_l2_error),
+    log_median_error=log(median_l2_error),
     delta_factor = as.factor(paste0("delta = ", delta))
   )
 
@@ -71,10 +73,6 @@ plot_final_rate <- ggplot(summary_results, aes(x = log_n, y = log_error, color =
   theme(legend.position = "bottom")
 
 print(plot_final_rate)
-
-# Save the plot to a high-quality file
-#ggsave("final_rate_plot.png", plot_final_rate, width = 12, height = 8, dpi = 300)
-#cat("Final rate plot saved to 'final_rate_plot.png'\n\n")
 
 
 # --- 6. Quantitative Analysis: Estimate Slopes ---
@@ -199,3 +197,122 @@ print(plot_normalized_rate)
 
 ggsave(file.path(aggregated_output_dir,"final_normalized_rate_plot.pdf"), plot_normalized_rate,width = 8.2, height = 4.5, dpi = 300) 
 ggsave(file.path(aggregated_output_dir,"final_normalized_rate_plot.pdf"), plot_normalized_rate, width = 8.2, height = 4.5, dpi = 300)
+
+
+#########################################################################################################################################
+#change mean into median
+# Normalize curves to start at 0 for direct slope comparison
+# We group by delta_factor and subtract the first log_error value from all others.
+normalized_summary_results <- summary_results %>%
+  group_by(delta_factor) %>%
+  mutate(
+    normalized_log_median_error = log_median_error - first(log_median_error)
+  )
+normalized_summary_results$delta_minus_0.05<-as.factor(normalized_summary_results$delta-0.05)
+# Create the normalized plot
+plot_normalized_rate_median <- ggplot(normalized_summary_results, aes(x = log_n, y = normalized_log_median_error, color = delta_minus_0.05)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    x = "log(n)",
+    y = "Normalized Log(Median L2 Error)",
+    color = "Noise Parameter (delta)"
+  ) +
+  theme_bw(base_size = 22) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(size = 20), 
+    legend.text = element_text(size = 18)   
+  )
+
+#print(plot_normalized_rate_median)
+
+# Save the normalized plot
+#ggsave("final_normalized_rate_plot.png", plot_normalized_rate, width = 11, height = 4.5, dpi = 300)
+#cat("Final normalized rate plot saved to 'final_normalized_rate_plot.png'\n")
+
+
+#Change colors(final graphs)
+# install.packages("ggplot2")
+library(ggplot2)
+
+
+actual_delta_levels <- c("0.15", "0.35", "0.55", "0.75", "1.45", "4.95")
+
+
+user_colors <- c(
+  "#4F2982", #  (Deep Indigo)
+  "#3B82A1", #  (Steel Blue)
+  "#00A08A", #  (Teal)
+  "#6DB38B", #  (Seafoam Green)
+  "#A98C63", #  (Camel)
+  "#E2C16A" #  (Ginger Yellow)
+)
+
+
+
+selected_palette <- setNames(user_colors, actual_delta_levels)
+
+
+
+plot_normalized_rate_median <- ggplot(
+  normalized_summary_results, 
+  aes(x = log_n, y = normalized_log_median_error, color = `delta_minus_0.05`) # 建议用反引号包裹非标准变量名
+) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.5) +
+  
+  
+  labs(
+    x = "Log(Sample Size, n)",
+    y = "Normalized Log(Median L2 Error)",
+    color = "Noise Parameter" 
+  ) +
+  
+  
+  scale_color_manual(
+    name = "Noise Parameter (Delta)", 
+    values = selected_palette
+  ) +
+  theme_bw(base_size = 22) + 
+  theme(
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 16),
+    
+    
+    legend.position = c(0.003, 0.006),
+    legend.justification = c(0, 0),
+    
+    
+    legend.background = element_rect(fill = "white", color="black",linewidth = 0.5),
+    legend.key = element_rect(fill = "transparent"),
+    legend.title = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    
+    
+    panel.grid.minor = element_blank()
+  ) +
+  
+  
+  guides(color = guide_legend(ncol = 2))
+
+
+print(plot_normalized_rate_median)
+
+ggsave(file.path(aggregated_output_dir,"final_normalized_rate_median_plot.pdf"), plot_normalized_rate_median,width = 8.2, height = 4.5, dpi = 300) 
+ggsave(file.path(aggregated_output_dir,"final_normalized_rate_median_plot.pdf"), plot_normalized_rate_median, width = 8.2, height = 4.5, dpi = 300)
+
+
+#计算斜率
+slope_estimates_median <- summary_results %>%
+  group_by(delta, delta_factor) %>%
+  do(model = lm(log_median_error ~ log_n, data = .)) %>%
+  summarise(
+    slope = coef(model)[2],
+    r_squared = summary(model)$r.squared,
+    .groups = 'drop'
+  )
+
+cat("--- Estimated Slopes from lm(log_median_error ~ log_n) ---\n")
+slope_estimates_median$Theoretical_rate<-c(-0.1304348, -0.2592593, -0.3548387,-0.4285714,-0.5,-0.5)
+print(slope_estimates_median)
