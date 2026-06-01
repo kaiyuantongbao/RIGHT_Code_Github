@@ -1,5 +1,0 @@
-"K_name","regime","multiplier","K_tar","K","block_size"
-"K1_global","global",1,160,160,12
-"K2_c10","local",10,64,64,31
-"K2_c12","local",12,77,77,25
-"K2_c14","local",14,90,90,22

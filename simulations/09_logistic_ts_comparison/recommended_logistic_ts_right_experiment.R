@@ -88,7 +88,7 @@ USE_PARALLEL <- env_bool("REC_USE_PARALLEL", USE_PARALLEL)
 N_CORES <- env_int("REC_N_CORES", N_CORES)
 
 out_tag <- Sys.getenv("REC_OUT_TAG", unset = "recommended_parallel")
-out_dir <- here("results", "09_logistic_ts_signal_pilot", out_tag)
+out_dir <- here("results", "09_logistic_ts_comparison", out_tag)
 raw_dir <- file.path(out_dir, "raw")
 summary_dir <- file.path(out_dir, "summary")
 fig_dir <- file.path(out_dir, "figures")
